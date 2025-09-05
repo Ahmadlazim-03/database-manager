@@ -1,0 +1,19 @@
+{
+  "name": "db-manager-app",
+  "version": "1.0.0",
+  "description": "Database Manager with Go Fiber Backend and Svelte Frontend",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && go run main.go",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "npm run build:frontend && npm run build:backend",
+    "build:frontend": "cd frontend && npm run build",
+    "build:backend": "cd backend && go build -o ../dist/server main.go",
+    "install:all": "npm run install:frontend && npm run install:backend",
+    "install:frontend": "cd frontend && npm install",
+    "install:backend": "cd backend && go mod tidy"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
