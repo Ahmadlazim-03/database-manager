@@ -27,6 +27,7 @@
 	let sortOrder = 'asc';
 	let filters = {};
 	let availableFields = [];
+	let collectionSchema = []; // Schema for the current collection
 
 	// Modal states
 	let showCreateModal = false;
@@ -34,6 +35,7 @@
 	let showDeleteModal = false;
 	let showFilterModal = false;
 	let currentDocument = {};
+	let newDocumentData = {}; // For form-based creation
 	let currentDocumentJSON = '';
 	let documentToDelete = null;
 
@@ -115,9 +117,26 @@
 
 			if (response.ok) {
 				const schema = await response.json();
-				availableFields = schema.fields || [];
-				console.log('Schema loaded for', selectedCollection, ':', availableFields);
-				console.log('availableFields updated to:', availableFields);
+				// Handle both old format (array of strings) and new format (array of objects)
+				if (schema.fields && schema.fields.length > 0) {
+					if (typeof schema.fields[0] === 'string') {
+						// Old format: array of strings
+						availableFields = schema.fields;
+						collectionSchema = schema.fields.map(field => ({ name: field, type: 'text' }));
+					} else {
+						// New format: array of objects with name and type
+						availableFields = schema.fields.map(field => field.name);
+						collectionSchema = schema.fields;
+					}
+				} else {
+					availableFields = [];
+					collectionSchema = [];
+				}
+				
+				console.log('Schema loaded for', selectedCollection, ':', collectionSchema);
+				
+				// Initialize newDocumentData with empty values
+				initializeNewDocumentData();
 				
 				// Update template if create modal is open
 				if (showCreateModal && (!currentDocumentJSON || currentDocumentJSON.trim() === '')) {
@@ -128,6 +147,124 @@
 		} catch (err) {
 			console.error('Error loading schema:', err);
 		}
+	}
+
+	function initializeNewDocumentData() {
+		newDocumentData = {};
+		collectionSchema.forEach(field => {
+			// Handle both old format (string) and new format (object)
+			const fieldName = typeof field === 'string' ? field : field.name;
+			// Skip auto-generated fields like id, created_at, updated_at
+			if (!['id', 'created_at', 'updated_at'].includes(fieldName.toLowerCase())) {
+				newDocumentData[fieldName] = '';
+			}
+		});
+	}
+
+	// Handle image upload with compression
+	async function handleImageUpload(event, fieldName) {
+		const file = event.target.files[0];
+		if (!file) return;
+
+		// Validate file type
+		const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+		if (!allowedTypes.includes(file.type)) {
+			error = 'Please select a valid image file (JPEG, PNG, GIF, or WebP)';
+			event.target.value = ''; // Clear the input
+			return;
+		}
+
+		// Validate file size (max 10MB for original file)
+		const maxOriginalSize = 10 * 1024 * 1024; // 10MB
+		if (file.size > maxOriginalSize) {
+			error = 'Original image file size must be less than 10MB';
+			event.target.value = ''; // Clear the input
+			return;
+		}
+
+		try {
+			loading = true;
+			error = null;
+
+			// Convert file to base64
+			const base64 = await convertFileToBase64(file);
+			
+			// Compress the image to reduce size for database storage
+			const compressedBase64 = await compressImage(base64, 0.7, 800, 600);
+			
+			// Check final size (should be under 1MB for database storage)
+			const finalSizeKB = Math.round((compressedBase64.length * 0.75) / 1024); // Approximate size in KB
+			console.log(`Image processed for ${fieldName}: Original: ${Math.round(file.size/1024)}KB, Compressed: ${finalSizeKB}KB`);
+			
+			if (finalSizeKB > 1024) { // If still larger than 1MB, compress more
+				const moreCompressed = await compressImage(base64, 0.5, 600, 400);
+				newDocumentData[fieldName] = moreCompressed;
+				console.log(`Further compressed to: ${Math.round((moreCompressed.length * 0.75) / 1024)}KB`);
+			} else {
+				newDocumentData[fieldName] = compressedBase64;
+			}
+			
+		} catch (err) {
+			console.error('Error uploading image:', err);
+			error = 'Failed to process image: ' + err.message;
+			event.target.value = ''; // Clear the input
+		} finally {
+			loading = false;
+		}
+	}
+
+	// Convert file to base64
+	function convertFileToBase64(file) {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(reader.result);
+			reader.onerror = () => reject(new Error('Failed to read file'));
+			reader.readAsDataURL(file);
+		});
+	}
+
+	// Compress image to reduce size
+	function compressImage(base64, quality = 0.7, maxWidth = 800, maxHeight = 600) {
+		return new Promise((resolve, reject) => {
+			const canvas = document.createElement('canvas');
+			const ctx = canvas.getContext('2d');
+			const img = new Image();
+			
+			img.onload = () => {
+				try {
+					// Calculate new dimensions while maintaining aspect ratio
+					let { width, height } = img;
+					
+					if (width > maxWidth || height > maxHeight) {
+						const ratio = Math.min(maxWidth / width, maxHeight / height);
+						width = Math.floor(width * ratio);
+						height = Math.floor(height * ratio);
+					}
+					
+					canvas.width = width;
+					canvas.height = height;
+					
+					// Use better image rendering
+					ctx.imageSmoothingEnabled = true;
+					ctx.imageSmoothingQuality = 'high';
+					
+					// Draw and compress
+					ctx.drawImage(img, 0, 0, width, height);
+					const compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+					resolve(compressedBase64);
+				} catch (error) {
+					reject(error);
+				}
+			};
+			
+			img.onerror = () => reject(new Error('Failed to load image'));
+			img.src = base64;
+		});
+	}
+
+	// Remove uploaded image
+	function removeImage(fieldName) {
+		newDocumentData[fieldName] = '';
 	}
 
 	async function loadDocuments() {
@@ -180,21 +317,23 @@
 		try {
 			let documentData = {};
 			
-			// Always use JSON input
-			if (!currentDocumentJSON || currentDocumentJSON.trim() === '') {
-				error = 'Please enter document data';
+			// Use form data instead of JSON
+			documentData = { ...newDocumentData };
+			
+			// Remove empty fields
+			Object.keys(documentData).forEach(key => {
+				if (documentData[key] === '' || documentData[key] === null || documentData[key] === undefined) {
+					delete documentData[key];
+				}
+			});
+			
+			if (Object.keys(documentData).length === 0) {
+				error = 'Please fill at least one field';
 				loading = false;
 				return;
 			}
 			
-			try {
-				documentData = JSON.parse(currentDocumentJSON);
-				console.log('Parsed document data:', documentData);
-			} catch (parseError) {
-				error = 'Invalid JSON format: ' + parseError.message;
-				loading = false;
-				return;
-			}
+			console.log('Document data from form:', documentData);
 
 			const requestBody = {
 				database_id: selectedConnection.id,
@@ -300,14 +439,15 @@
 	}
 
 	async function openCreateModal() {
-		currentDocument = {};
-		showCreateModal = true;
-		// Load schema first, then generate template
+		// Load schema first
 		await loadFieldSchema();
-		// Generate JSON template based on available fields
+		// Initialize form data
+		initializeNewDocumentData();
+		showCreateModal = true;
+		// Generate JSON template as fallback
 		currentDocumentJSON = generateJSONTemplate(availableFields);
 		console.log('openCreateModal - availableFields:', availableFields);
-		console.log('openCreateModal - generated template:', currentDocumentJSON);
+		console.log('openCreateModal - newDocumentData:', newDocumentData);
 	}
 
 	function openEditModal(document) {
@@ -322,6 +462,7 @@
 
 	function closeCreateModal() {
 		showCreateModal = false;
+		newDocumentData = {};
 		currentDocument = {};
 		resetCreateModalPosition();
 	}
@@ -745,6 +886,9 @@
 						<div class="loading">Loading documents...</div>
 					{:else if documents.length > 0}
 						<div class="table-wrapper">
+							<div class="scroll-hint">
+								<span>⟵ Scroll horizontally to see all columns ⟶</span>
+							</div>
 							<div class="table-container">
 								<table class="documents-table">
 									<thead>
@@ -770,14 +914,6 @@
 													</button>
 												</th>
 											{/each}
-											<th class="fixed-column">Created Date</th>
-											<th class="fixed-column">Updated Date</th>
-											<th class="fixed-column">Status</th>
-											<th class="fixed-column">Category</th>
-											<th class="fixed-column">Tags</th>
-											<th class="fixed-column">Priority</th>
-											<th class="fixed-column">Size</th>
-											<th class="fixed-column">Type</th>
 											<th class="actions-column">Actions</th>
 										</tr>
 									</thead>
@@ -787,14 +923,6 @@
 												{#each getDocumentKeys(documents) as key}
 													<td class="data-cell">{formatValue(document[key])}</td>
 												{/each}
-												<td class="data-cell">{new Date(document.created_at || Date.now()).toLocaleDateString()}</td>
-												<td class="data-cell">{new Date(document.updated_at || Date.now()).toLocaleDateString()}</td>
-												<td class="data-cell"><span class="status-badge">Active</span></td>
-												<td class="data-cell">General</td>
-												<td class="data-cell">tag1, tag2, tag3</td>
-												<td class="data-cell">High</td>
-												<td class="data-cell">{Math.floor(Math.random() * 1000)}KB</td>
-												<td class="data-cell">Document</td>
 												<td class="actions-cell">
 													<div class="action-buttons">
 														<button 
@@ -899,20 +1027,125 @@
 
 		<form on:submit|preventDefault={createDocument}>
 			<div class="form-group">
-				<label class="form-label">Document Data (JSON)</label>
-				<textarea
-					bind:value={currentDocumentJSON}
-					class="form-textarea"
-					placeholder={generateJSONTemplate(availableFields)}
-					rows="12"
-					required
-				></textarea>
+				<label class="form-label">Document Fields</label>
+				<div class="dynamic-form">
+					{#each collectionSchema as field}
+						{#if !['id', 'created_at', 'updated_at'].includes((typeof field === 'string' ? field : field.name).toLowerCase())}
+							{@const fieldName = typeof field === 'string' ? field : field.name}
+							{@const fieldType = typeof field === 'string' ? 'text' : field.type}
+							<div class="form-field">
+								<label class="field-label">{fieldName}</label>
+								
+								{#if fieldType === 'image'}
+									<div class="image-input-container">
+										<input
+											type="file"
+											accept="image/*"
+											on:change={(e) => handleImageUpload(e, fieldName)}
+											class="file-input"
+											id="file-{fieldName}"
+										/>
+										<label for="file-{fieldName}" class="file-input-label">
+											📷 Choose Image
+										</label>
+										{#if newDocumentData[fieldName]}
+											<div class="image-preview">
+												{#if newDocumentData[fieldName].startsWith('data:')}
+													<img src={newDocumentData[fieldName]} alt="Preview" class="preview-image" />
+												{:else}
+													<span class="file-name">{newDocumentData[fieldName]}</span>
+												{/if}
+												<button type="button" class="remove-image" on:click={() => removeImage(fieldName)}>×</button>
+											</div>
+										{/if}
+										<small class="field-hint">Upload an image file or enter image URL</small>
+										<Input
+											type="url"
+											bind:value={newDocumentData[fieldName]}
+											placeholder="Or enter image URL"
+											class="form-input image-url-input"
+										/>
+									</div>
+								{:else if fieldType === 'textarea'}
+									<textarea
+										bind:value={newDocumentData[fieldName]}
+										placeholder="Enter {fieldName}"
+										class="form-textarea"
+										rows="3"
+									></textarea>
+								{:else if fieldType === 'checkbox'}
+									<label class="checkbox-container">
+										<input
+											type="checkbox"
+											bind:checked={newDocumentData[fieldName]}
+											class="form-checkbox"
+										/>
+										<span class="checkmark"></span>
+										Enable {fieldName}
+									</label>
+								{:else if fieldType === 'number'}
+									<Input
+										type="number"
+										bind:value={newDocumentData[fieldName]}
+										placeholder="Enter {fieldName}"
+										class="form-input"
+									/>
+								{:else if fieldType === 'email'}
+									<Input
+										type="email"
+										bind:value={newDocumentData[fieldName]}
+										placeholder="Enter email address"
+										class="form-input"
+									/>
+								{:else if fieldType === 'url'}
+									<Input
+										type="url"
+										bind:value={newDocumentData[fieldName]}
+										placeholder="Enter URL"
+										class="form-input"
+									/>
+								{:else if fieldType === 'tel'}
+									<Input
+										type="tel"
+										bind:value={newDocumentData[fieldName]}
+										placeholder="Enter phone number"
+										class="form-input"
+									/>
+								{:else if fieldType === 'password'}
+									<Input
+										type="password"
+										bind:value={newDocumentData[fieldName]}
+										placeholder="Enter password"
+										class="form-input"
+									/>
+								{:else if fieldType === 'datetime-local'}
+									<Input
+										type="datetime-local"
+										bind:value={newDocumentData[fieldName]}
+										class="form-input"
+									/>
+								{:else}
+									<Input
+										type="text"
+										bind:value={newDocumentData[fieldName]}
+										placeholder="Enter {fieldName}"
+										class="form-input"
+									/>
+								{/if}
+							</div>
+						{/if}
+					{/each}
+					
+					{#if collectionSchema.length === 0}
+						<p class="no-fields">Loading collection schema...</p>
+					{/if}
+				</div>
 				<small class="form-help">
-					{#if availableFields && availableFields.length > 0}
-						Template generated for collection: <strong>{selectedCollection}</strong><br>
-						Available fields: <em>{availableFields.join(', ')}</em>
+					{#if collectionSchema && collectionSchema.length > 0}
+						Fill the fields for collection: <strong>{selectedCollection}</strong><br>
+						Auto-generated fields (id, created_at, updated_at) are handled automatically
 					{:else}
-						Enter valid JSON data for the document
+						Loading available fields...
 					{/if}
 				</small>
 			</div>
@@ -1076,7 +1309,7 @@
 		max-width: 100vw;
 		width: 100%;
 		margin: 0 auto;
-		padding: 20px;
+		padding: 10px; /* Reduced padding */
 		box-sizing: border-box;
 		overflow-x: hidden; /* Prevent horizontal overflow */
 	}
@@ -1084,7 +1317,8 @@
 	/* Responsive container */
 	@media (min-width: 1400px) {
 		.container {
-			max-width: 1400px;
+			max-width: 1500px; /* Increased max width */
+			padding: 15px; /* Slightly more padding for larger screens */
 		}
 	}
 
@@ -1155,18 +1389,46 @@
 	/* Database Management Layout */
 	.database-management {
 		display: grid;
-		grid-template-columns: 300px 1fr;
-		gap: 2rem;
+		grid-template-columns: 280px 1fr;
+		gap: 1rem;
 		min-height: 600px;
+		margin: 0 -0.5rem; /* Negative margin to use more space */
+		padding: 0 0.5rem;
+	}
+
+	/* Responsive adjustments */
+	@media (max-width: 1200px) {
+		.database-management {
+			grid-template-columns: 260px 1fr;
+			gap: 0.75rem;
+		}
+	}
+
+	@media (max-width: 768px) {
+		.database-management {
+			grid-template-columns: 1fr;
+			gap: 1rem;
+		}
+		
+		.sidebar {
+			order: 2;
+			max-height: 300px;
+		}
+		
+		.main-content {
+			order: 1;
+		}
 	}
 
 	/* Sidebar */
 	.sidebar {
 		background: white;
 		border-radius: 12px;
-		padding: 1.5rem;
+		padding: 1rem; /* Reduced padding */
 		box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
 		border: 2px solid #f1f5f9;
+		min-width: 260px; /* Ensure minimum width */
+		max-width: 280px; /* Maximum width */
 	}
 
 	.sidebar-header {
@@ -1218,9 +1480,11 @@
 	.main-content {
 		background: white;
 		border-radius: 12px;
-		padding: 1.5rem;
+		padding: 1rem; /* Reduced padding */
 		box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
 		border: 2px solid #f1f5f9;
+		min-width: 0; /* Allow content to shrink */
+		overflow: hidden; /* Prevent overflow */
 	}
 
 	.controls {
@@ -1290,22 +1554,52 @@
 		position: relative; /* For absolute positioning of scroll hint */
 	}
 
+	.scroll-hint {
+		background: #f8f9fa;
+		padding: 0.5rem 1rem;
+		text-align: center;
+		font-size: 0.875rem;
+		color: #6b7280;
+		border-bottom: 1px solid #e5e7eb;
+		font-style: italic;
+	}
+
 	.table-container {
 		overflow-x: auto;
-		max-width: 100vw; /* Fix width to viewport */
+		overflow-y: visible;
+		max-width: 100%;
 		width: 100%;
 		-webkit-overflow-scrolling: touch; /* Smooth scrolling on mobile */
-		/* Ensure container never exceeds viewport */
 		box-sizing: border-box;
 		border-radius: 8px;
 		border: 1px solid #e5e7eb;
-		/* Add scroll indicator */
 		position: relative;
+		/* Enhanced scrollbar styling */
+		scrollbar-width: thin;
+		scrollbar-color: #cbd5e0 #f7fafc;
+	}
+
+	.table-container::-webkit-scrollbar {
+		height: 12px;
+	}
+
+	.table-container::-webkit-scrollbar-track {
+		background: #f7fafc;
+		border-radius: 6px;
+	}
+
+	.table-container::-webkit-scrollbar-thumb {
+		background: #cbd5e0;
+		border-radius: 6px;
+	}
+
+	.table-container::-webkit-scrollbar-thumb:hover {
+		background: #a0aec0;
 	}
 
 	.documents-table {
-		width: max-content; /* Allow table to expand beyond container */
-		min-width: 1400px; /* Force minimum width larger than most screens */
+		width: 100%;
+		min-width: 1000px; /* Force minimum width to trigger horizontal scroll */
 		border-collapse: collapse;
 		background: white;
 		table-layout: auto; /* Auto layout for dynamic content */
@@ -1313,16 +1607,16 @@
 
 	.documents-table th,
 	.documents-table td {
-		padding: 0.75rem 1.5rem; /* More horizontal padding */
+		padding: 0.5rem 0.75rem; /* Reduced padding to fit more content */
 		text-align: left;
 		border-bottom: 1px solid #e2e8f0;
-		border-right: 1px solid #f1f5f9; /* Add right border to separate columns */
+		border-right: 1px solid #f1f5f9;
 		vertical-align: top;
-		min-width: 150px; /* Increased minimum width for each column */
-		max-width: 300px; /* Increased max width */
-		white-space: nowrap; /* Prevent text wrapping */
+		min-width: 100px; /* Smaller minimum width */
+		max-width: 200px; /* Reasonable max width */
+		white-space: nowrap;
 		overflow: hidden;
-		text-overflow: ellipsis; /* Show ellipsis for long text */
+		text-overflow: ellipsis;
 		box-sizing: border-box;
 	}
 
@@ -1435,25 +1729,31 @@
 	}
 
 	.actions-column {
-		width: 150px;
-		min-width: 150px;
+		width: 160px !important;
+		min-width: 160px !important;
+		max-width: 160px !important;
 		text-align: center;
 		position: sticky;
 		right: 0;
-		background: #f8f9fa;
-		border-left: 1px solid #e2e8f0;
-		z-index: 5;
+		background: #f8f9fa !important;
+		border-left: 2px solid #e2e8f0;
+		z-index: 15;
+		box-shadow: -3px 0 6px rgba(0,0,0,0.1);
+		white-space: nowrap;
 	}
 
 	.actions-cell {
-		width: 150px;
-		min-width: 150px;
+		width: 160px !important;
+		min-width: 160px !important;
+		max-width: 160px !important;
 		text-align: center;
 		position: sticky;
 		right: 0;
-		background: white;
-		border-left: 1px solid #e2e8f0;
-		z-index: 5;
+		background: white !important;
+		border-left: 2px solid #e2e8f0;
+		z-index: 15;
+		box-shadow: -3px 0 6px rgba(0,0,0,0.1);
+		white-space: nowrap;
 	}
 
 	.action-buttons {
@@ -1462,13 +1762,44 @@
 		justify-content: center;
 		align-items: center;
 		flex-wrap: nowrap;
+		padding: 0.25rem;
 	}
 
 	.action-buttons .btn {
-		font-size: 0.8rem;
+		font-size: 0.75rem;
 		padding: 0.25rem 0.5rem;
 		white-space: nowrap;
-		min-width: auto;
+		border-radius: 4px;
+		border: 1px solid transparent;
+		cursor: pointer;
+		transition: all 0.2s ease;
+	}
+
+	.action-buttons .btn:hover {
+		transform: translateY(-1px);
+		box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+	}
+
+	.btn-info {
+		background-color: #17a2b8;
+		color: white;
+		border-color: #17a2b8;
+	}
+
+	.btn-info:hover {
+		background-color: #138496;
+		border-color: #117a8b;
+	}
+
+	.btn-danger {
+		background-color: #dc3545;
+		color: white;
+		border-color: #dc3545;
+	}
+
+	.btn-danger:hover {
+		background-color: #c82333;
+		border-color: #bd2130;
 	}
 
 	/* Pagination */
@@ -1718,6 +2049,38 @@
 		padding: 0 24px 24px;
 	}
 
+	/* Dynamic Form Styles */
+	.dynamic-form {
+		display: grid;
+		gap: 1rem;
+		max-height: 400px;
+		overflow-y: auto;
+		padding: 1rem;
+		border: 1px solid #e5e7eb;
+		border-radius: 8px;
+		background: #f9fafb;
+	}
+
+	.form-field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.field-label {
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: #374151;
+		text-transform: capitalize;
+	}
+
+	.no-fields {
+		text-align: center;
+		color: #6b7280;
+		font-style: italic;
+		margin: 2rem 0;
+	}
+
 	.filter-field {
 		margin-bottom: 1rem;
 	}
@@ -1959,6 +2322,308 @@
 	@media (max-width: 768px) {
 		.table-wrapper::after {
 			display: none;
+		}
+	}
+
+	/* Image Input Styling */
+	.image-input-container {
+		position: relative;
+		border: 2px dashed #e0e7ff;
+		border-radius: 8px;
+		padding: 1rem;
+		background: #f8faff;
+		transition: all 0.2s;
+	}
+
+	.image-input-container:hover {
+		border-color: #667eea;
+		background: #f0f4ff;
+	}
+
+	.file-input {
+		position: absolute;
+		opacity: 0;
+		width: 100%;
+		height: 100%;
+		cursor: pointer;
+	}
+
+	.file-input-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.5rem 1rem;
+		background: linear-gradient(135deg, #667eea, #764ba2);
+		color: white;
+		border-radius: 6px;
+		cursor: pointer;
+		font-weight: 500;
+		font-size: 0.9rem;
+		transition: all 0.2s;
+		margin-bottom: 0.5rem;
+	}
+
+	.file-input-label:hover {
+		transform: translateY(-1px);
+		box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+	}
+
+	.image-preview {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin: 0.5rem 0;
+		padding: 0.5rem;
+		background: white;
+		border-radius: 6px;
+		border: 1px solid #e0e7ff;
+	}
+
+	.preview-image {
+		width: 60px;
+		height: 60px;
+		object-fit: cover;
+		border-radius: 4px;
+		border: 1px solid #ddd;
+	}
+
+	.file-name {
+		font-size: 0.9rem;
+		color: #555;
+		max-width: 200px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.remove-image {
+		background: #dc3545;
+		color: white;
+		border: none;
+		border-radius: 50%;
+		width: 24px;
+		height: 24px;
+		cursor: pointer;
+		font-size: 14px;
+		line-height: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		margin-left: auto;
+	}
+
+	.remove-image:hover {
+		background: #c82333;
+	}
+
+	.image-url-input {
+		margin-top: 0.5rem;
+	}
+
+	.field-hint {
+		display: block;
+		margin-top: 0.25rem;
+		color: #666;
+		font-size: 0.8rem;
+	}
+
+	/* Checkbox Styling */
+	.checkbox-container {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		cursor: pointer;
+		padding: 0.5rem 0;
+		font-size: 0.9rem;
+		color: #555;
+	}
+
+	.form-checkbox {
+		width: 18px;
+		height: 18px;
+		cursor: pointer;
+	}
+
+	.checkmark {
+		position: relative;
+		display: inline-block;
+		width: 20px;
+		height: 20px;
+		background: white;
+		border: 2px solid #e0e7ff;
+		border-radius: 4px;
+		transition: all 0.2s;
+	}
+
+	.checkbox-container input:checked + .checkmark {
+		background: linear-gradient(135deg, #667eea, #764ba2);
+		border-color: #667eea;
+	}
+
+	.checkbox-container input:checked + .checkmark::after {
+		content: '✓';
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		color: white;
+		font-size: 12px;
+		font-weight: bold;
+	}
+
+	/* Image Input Styling */
+	.image-input-container {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.file-input {
+		display: none;
+	}
+
+	.file-input-label {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		padding: 10px 16px;
+		background: linear-gradient(135deg, #667eea, #764ba2);
+		color: white;
+		border: none;
+		border-radius: 8px;
+		cursor: pointer;
+		font-size: 14px;
+		font-weight: 500;
+		transition: all 0.2s;
+		max-width: 200px;
+	}
+
+	.file-input-label:hover {
+		transform: translateY(-1px);
+		box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+	}
+
+	.image-preview {
+		position: relative;
+		display: inline-block;
+		margin-top: 8px;
+	}
+
+	.preview-image {
+		max-width: 200px;
+		max-height: 150px;
+		border-radius: 8px;
+		border: 2px solid #e0e7ff;
+		object-fit: cover;
+	}
+
+	.remove-image {
+		position: absolute;
+		top: -8px;
+		right: -8px;
+		width: 24px;
+		height: 24px;
+		background: #ef4444;
+		color: white;
+		border: none;
+		border-radius: 50%;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 14px;
+		font-weight: bold;
+		transition: all 0.2s;
+	}
+
+	.remove-image:hover {
+		background: #dc2626;
+		transform: scale(1.1);
+	}
+
+	.image-url-input {
+		margin-top: 8px;
+	}
+
+	.field-hint {
+		font-size: 12px;
+		color: #6b7280;
+		margin-top: 4px;
+	}
+
+	.file-name {
+		display: inline-block;
+		padding: 8px 12px;
+		background: #f3f4f6;
+		border-radius: 6px;
+		font-size: 13px;
+		color: #374151;
+		max-width: 200px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* Form Textarea */
+	.form-textarea {
+		width: 100%;
+		padding: 12px;
+		border: 2px solid #e0e7ff;
+		border-radius: 8px;
+		font-size: 14px;
+		resize: vertical;
+		min-height: 80px;
+		font-family: inherit;
+		transition: border-color 0.2s;
+	}
+
+	.form-textarea:focus {
+		outline: none;
+		border-color: #667eea;
+		box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+	}
+
+	/* Loading and Error States */
+	.loading-overlay {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		background: rgba(255, 255, 255, 0.8);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 8px;
+		z-index: 10;
+	}
+
+	.loading-spinner {
+		width: 24px;
+		height: 24px;
+		border: 2px solid #e0e7ff;
+		border-top: 2px solid #667eea;
+		border-radius: 50%;
+		animation: spin 1s linear infinite;
+	}
+
+	@keyframes spin {
+		0% { transform: rotate(0deg); }
+		100% { transform: rotate(360deg); }
+	}
+
+	/* Responsive adjustments for forms */
+	@media (max-width: 768px) {
+		.preview-image {
+			max-width: 150px;
+			max-height: 100px;
+		}
+		
+		.file-input-label {
+			max-width: 150px;
+			font-size: 13px;
+			padding: 8px 12px;
 		}
 	}
 </style>

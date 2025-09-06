@@ -20,11 +20,13 @@ func main() {
 
 	// Create Fiber app
 	app := fiber.New(fiber.Config{
+		BodyLimit: 10 * 1024 * 1024, // 10MB limit for request body
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
 			if e, ok := err.(*fiber.Error); ok {
 				code = e.Code
 			}
+			log.Printf("Error: %v", err)
 			return c.Status(code).JSON(fiber.Map{
 				"error": err.Error(),
 			})

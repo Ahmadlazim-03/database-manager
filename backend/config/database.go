@@ -40,9 +40,9 @@ func ConnectDB() {
 	// Try to connect to PostgreSQL first
 	host := GetEnv("DB_HOST", "localhost")
 	port := GetEnv("DB_PORT", "5432")
-	dbname := GetEnv("DB_NAME", "dbmanager")
+	dbname := GetEnv("DB_NAME", "postgres")
 	username := GetEnv("DB_USER", "postgres")
-	password := GetEnv("DB_PASSWORD", "password")
+	password := GetEnv("DB_PASSWORD", "")
 	
 	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=Asia/Shanghai",
 		host, username, password, dbname, port)

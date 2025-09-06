@@ -50,6 +50,69 @@ func (h *DatabaseManagementHandler) getUserID(c *fiber.Ctx) (uuid.UUID, error) {
 	return userID, nil
 }
 
+// Helper function to determine input type based on field name and data type
+func determineInputType(fieldName, dataType string) string {
+	fieldNameLower := strings.ToLower(fieldName)
+	dataTypeLower := strings.ToLower(dataType)
+	
+	// Check for image/photo fields first by name
+	if strings.Contains(fieldNameLower, "photo") || 
+	   strings.Contains(fieldNameLower, "image") || 
+	   strings.Contains(fieldNameLower, "picture") ||
+	   strings.Contains(fieldNameLower, "avatar") ||
+	   strings.Contains(fieldNameLower, "thumbnail") ||
+	   strings.Contains(fieldNameLower, "logo") ||
+	   strings.Contains(fieldNameLower, "icon") {
+		return "image"
+	}
+	
+	// Check for email fields
+	if strings.Contains(fieldNameLower, "email") {
+		return "email"
+	}
+	
+	// Check for URL fields
+	if strings.Contains(fieldNameLower, "url") || strings.Contains(fieldNameLower, "link") {
+		return "url"
+	}
+	
+	// Check for password fields
+	if strings.Contains(fieldNameLower, "password") || strings.Contains(fieldNameLower, "pass") {
+		return "password"
+	}
+	
+	// Check for phone fields
+	if strings.Contains(fieldNameLower, "phone") || strings.Contains(fieldNameLower, "tel") {
+		return "tel"
+	}
+	
+	// Check for date/time fields
+	if strings.Contains(fieldNameLower, "date") || strings.Contains(fieldNameLower, "time") ||
+	   strings.Contains(dataTypeLower, "date") || strings.Contains(dataTypeLower, "time") ||
+	   strings.Contains(dataTypeLower, "timestamp") {
+		return "datetime-local"
+	}
+	
+	// Check by data type
+	if strings.Contains(dataTypeLower, "int") || strings.Contains(dataTypeLower, "number") ||
+	   strings.Contains(dataTypeLower, "decimal") || strings.Contains(dataTypeLower, "float") ||
+	   strings.Contains(dataTypeLower, "double") {
+		return "number"
+	}
+	
+	if strings.Contains(dataTypeLower, "bool") {
+		return "checkbox"
+	}
+	
+	if strings.Contains(dataTypeLower, "text") || strings.Contains(dataTypeLower, "longtext") ||
+	   strings.Contains(dataTypeLower, "mediumtext") {
+		return "textarea"
+	}
+	
+	// Default to text
+	return "text"
+}
+
 // GetCollections returns all collections for a database connection
 func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 	userID, err := h.getUserID(c)
@@ -192,7 +255,12 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 		})
 	}
 
-	var fields []string
+	type FieldInfo struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+
+	var fields []FieldInfo
 
 	switch connection.Type {
 	case "mongodb":
@@ -207,7 +275,7 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 
 		collection := client.Database(connection.Database).Collection(collectionName)
 		
-		// Get a sample document to extract field names
+		// Get a sample document to extract field names and types
 		cursor, err := collection.Find(context.Background(), bson.D{}, options.Find().SetLimit(10))
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
@@ -216,25 +284,57 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 		}
 		defer cursor.Close(context.Background())
 
-		fieldSet := make(map[string]bool)
+		fieldSet := make(map[string]string) // field name -> type
 		for cursor.Next(context.Background()) {
 			var doc bson.M
 			if err := cursor.Decode(&doc); err != nil {
 				continue
 			}
-			for key := range doc {
+			for key, value := range doc {
 				if key != "_id" {
-					fieldSet[key] = true
+					fieldType := "text"
+					// Try to determine field type from value
+					switch value.(type) {
+					case string:
+						fieldType = "text"
+						// Check if it looks like an image URL or file path
+						if val, ok := value.(string); ok {
+							if strings.Contains(strings.ToLower(key), "photo") || 
+							   strings.Contains(strings.ToLower(key), "image") || 
+							   strings.Contains(strings.ToLower(key), "picture") ||
+							   strings.Contains(strings.ToLower(key), "avatar") ||
+							   strings.Contains(strings.ToLower(key), "thumbnail") ||
+							   strings.HasSuffix(strings.ToLower(val), ".jpg") ||
+							   strings.HasSuffix(strings.ToLower(val), ".jpeg") ||
+							   strings.HasSuffix(strings.ToLower(val), ".png") ||
+							   strings.HasSuffix(strings.ToLower(val), ".gif") ||
+							   strings.HasSuffix(strings.ToLower(val), ".webp") {
+								fieldType = "image"
+							}
+						}
+					case int, int32, int64:
+						fieldType = "number"
+					case float32, float64:
+						fieldType = "number"
+					case bool:
+						fieldType = "boolean"
+					default:
+						fieldType = "text"
+					}
+					
+					if _, exists := fieldSet[key]; !exists {
+						fieldSet[key] = fieldType
+					}
 				}
 			}
 		}
 
-		for field := range fieldSet {
-			fields = append(fields, field)
+		for fieldName, fieldType := range fieldSet {
+			fields = append(fields, FieldInfo{Name: fieldName, Type: fieldType})
 		}
 
 	case "mysql", "postgresql", "postgres":
-		// Get column names for SQL tables
+		// Get column names and types for SQL tables
 		sqlClient, err := h.dbService.ConnectSQL(connection)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
@@ -245,20 +345,23 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 
 		var query string
 		if connection.Type == "mysql" {
+			// Get column name and data type for MySQL
 			query = fmt.Sprintf("DESCRIBE %s", collectionName)
 		} else {
 			// PostgreSQL is case-sensitive, try both original and lowercase
 			query = fmt.Sprintf(`
-				SELECT column_name 
+				SELECT column_name, data_type 
 				FROM information_schema.columns 
 				WHERE table_name = '%s' AND table_schema = 'public'
+				ORDER BY ordinal_position
 			`, collectionName)
 			
 			// Also try lowercase version
 			queryLower := fmt.Sprintf(`
-				SELECT column_name 
+				SELECT column_name, data_type 
 				FROM information_schema.columns 
 				WHERE table_name = '%s' AND table_schema = 'public'
+				ORDER BY ordinal_position
 			`, strings.ToLower(collectionName))
 			
 			log.Printf("Will try both queries - original: %s, lowercase: %s", query, queryLower)
@@ -285,19 +388,25 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 					log.Printf("Error scanning MySQL row: %v", err)
 					continue
 				}
-				log.Printf("Found MySQL field: %s", field)
-				fields = append(fields, field)
+				log.Printf("Found MySQL field: %s, type: %s", field, fieldType)
+				
+				// Determine input type based on MySQL field type and name
+				inputType := determineInputType(field, fieldType)
+				fields = append(fields, FieldInfo{Name: field, Type: inputType})
 				fieldCount++
 			}
 		} else {
 			for rows.Next() {
-				var field string
-				if err := rows.Scan(&field); err != nil {
+				var field, dataType string
+				if err := rows.Scan(&field, &dataType); err != nil {
 					log.Printf("Error scanning PostgreSQL row: %v", err)
 					continue
 				}
-				log.Printf("Found PostgreSQL field: %s", field)
-				fields = append(fields, field)
+				log.Printf("Found PostgreSQL field: %s, type: %s", field, dataType)
+				
+				// Determine input type based on PostgreSQL field type and name
+				inputType := determineInputType(field, dataType)
+				fields = append(fields, FieldInfo{Name: field, Type: inputType})
 				fieldCount++
 			}
 		}
@@ -308,9 +417,10 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 			rows.Close() // Close previous rows
 			
 			queryLower := fmt.Sprintf(`
-				SELECT column_name 
+				SELECT column_name, data_type 
 				FROM information_schema.columns 
 				WHERE table_name = '%s' AND table_schema = 'public'
+				ORDER BY ordinal_position
 			`, strings.ToLower(collectionName))
 			
 			log.Printf("Executing lowercase query: %s", queryLower)
@@ -321,13 +431,16 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 			} else {
 				defer rows.Close()
 				for rows.Next() {
-					var field string
-					if err := rows.Scan(&field); err != nil {
+					var field, dataType string
+					if err := rows.Scan(&field, &dataType); err != nil {
 						log.Printf("Error scanning PostgreSQL lowercase row: %v", err)
 						continue
 					}
-					log.Printf("Found PostgreSQL field (lowercase): %s", field)
-					fields = append(fields, field)
+					log.Printf("Found PostgreSQL field (lowercase): %s, type: %s", field, dataType)
+					
+					// Determine input type based on PostgreSQL field type and name
+					inputType := determineInputType(field, dataType)
+					fields = append(fields, FieldInfo{Name: field, Type: inputType})
 				}
 			}
 		}
@@ -611,7 +724,18 @@ func (h *DatabaseManagementHandler) CreateDocument(c *fiber.Ctx) error {
 	}
 
 	log.Printf("Received request for collection: %s", collectionName)
-	log.Printf("Request body: %s", string(c.Body()))
+	
+	// Check request body size before parsing
+	bodySize := len(c.Body())
+	maxBodySize := 5 * 1024 * 1024 // 5MB limit
+	if bodySize > maxBodySize {
+		log.Printf("Request body too large: %d bytes (max: %d bytes)", bodySize, maxBodySize)
+		return c.Status(413).JSON(fiber.Map{
+			"error": "Request body too large. Maximum size is 5MB.",
+		})
+	}
+	
+	log.Printf("Request body size: %d bytes", bodySize)
 
 	if err := c.BodyParser(&req); err != nil {
 		log.Printf("Body parser error: %v", err)
@@ -620,7 +744,20 @@ func (h *DatabaseManagementHandler) CreateDocument(c *fiber.Ctx) error {
 		})
 	}
 
-	log.Printf("Parsed request - DatabaseID: %s, Data: %+v", req.DatabaseID, req.Data)
+	// Validate individual field sizes, especially for image data
+	for fieldName, fieldValue := range req.Data {
+		if valueStr, ok := fieldValue.(string); ok {
+			// Check if this might be base64 image data
+			if strings.HasPrefix(valueStr, "data:image/") && len(valueStr) > 1024*1024 { // 1MB limit per image
+				log.Printf("Image field %s is too large: %d characters", fieldName, len(valueStr))
+				return c.Status(413).JSON(fiber.Map{
+					"error": fmt.Sprintf("Image in field '%s' is too large. Maximum size per image is 1MB.", fieldName),
+				})
+			}
+		}
+	}
+
+	log.Printf("Parsed request - DatabaseID: %s, Data fields: %d", req.DatabaseID, len(req.Data))
 
 	databaseID, err := uuid.Parse(req.DatabaseID)
 	if err != nil {
