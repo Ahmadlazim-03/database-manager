@@ -2,7 +2,8 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { apiClient } from '$lib/api';
-	import { isAuthenticated, connections, logout } from '$lib/stores';
+	import { isAuthenticated, connections, logout, user } from '$lib/stores';
+	import Navbar from '$lib/components/Navbar.svelte';
 
 	let showModal = false;
 	let loading = false;
@@ -298,17 +299,7 @@
 	<title>Database Connections - Database Manager</title>
 </svelte:head>
 
-<nav class="navbar">
-	<div class="container">
-		<a href="/dashboard" class="navbar-brand">Database Manager</a>
-		<div class="navbar-nav">
-			<a href="/dashboard">Dashboard</a>
-			<a href="/connections" class="active">Connections</a>
-			<a href="/api-management">API Management</a>
-			<button class="btn btn-secondary" on:click={handleLogout}>Logout</button>
-		</div>
-	</div>
-</nav>
+<Navbar {user} {handleLogout} />
 
 <div class="container">
 	<div class="page-header">
@@ -884,9 +875,5 @@
 	.empty-state p {
 		margin-bottom: 24px;
 		font-size: 1.1rem;
-	}
-
-	.navbar-nav .active {
-		background-color: rgba(255, 255, 255, 0.2);
 	}
 </style>

@@ -76,18 +76,23 @@ func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 	// Get database connection info using GORM
 	var connection models.DatabaseConnection
 	if err := config.DB.Where("id = ? AND user_id = ?", databaseID, userID).First(&connection).Error; err != nil {
+		log.Printf("Database connection not found: %v", err)
 		return c.Status(404).JSON(fiber.Map{
 			"error": "Database connection not found",
 		})
 	}
 
+	log.Printf("Found connection: ID=%s, Type=%s, Host=%s, Database=%s", connection.ID, connection.Type, connection.Host, connection.Database)
+
 	var collections []string
 
 	switch connection.Type {
 	case "mongodb":
+		log.Printf("Processing MongoDB connection")
 		// Connect to MongoDB
 		client, err := h.dbService.ConnectMongoDB(connection)
 		if err != nil {
+			log.Printf("MongoDB connection failed: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to MongoDB: " + err.Error(),
 			})
@@ -97,16 +102,19 @@ func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 		database := client.Database(connection.Database)
 		collectionNames, err := database.ListCollectionNames(context.Background(), bson.D{})
 		if err != nil {
+			log.Printf("Failed to list MongoDB collections: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to list collections: " + err.Error(),
 			})
 		}
 		collections = collectionNames
 
-	case "mysql", "postgresql":
+	case "mysql", "postgresql", "postgres":
+		log.Printf("Processing SQL connection type: %s", connection.Type)
 		// For SQL databases, get table names
 		sqlClient, err := h.dbService.ConnectSQL(connection)
 		if err != nil {
+			log.Printf("SQL connection failed: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to database: " + err.Error(),
 			})
@@ -119,9 +127,11 @@ func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 		} else {
 			query = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
 		}
+		log.Printf("Executing query: %s", query)
 
 		rows, err := sqlClient.Query(query)
 		if err != nil {
+			log.Printf("Query failed: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to list tables: " + err.Error(),
 			})
@@ -131,12 +141,15 @@ func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 		for rows.Next() {
 			var tableName string
 			if err := rows.Scan(&tableName); err != nil {
+				log.Printf("Error scanning table name: %v", err)
 				continue
 			}
 			collections = append(collections, tableName)
 		}
+		log.Printf("Found %d collections/tables", len(collections))
 
 	default:
+		log.Printf("Unsupported database type: %s", connection.Type)
 		return c.Status(400).JSON(fiber.Map{
 			"error": "Unsupported database type",
 		})
@@ -526,29 +539,42 @@ func (h *DatabaseManagementHandler) CreateDocument(c *fiber.Ctx) error {
 		Data       map[string]interface{} `json:"data"`
 	}
 
+	log.Printf("Received request for collection: %s", collectionName)
+	log.Printf("Request body: %s", string(c.Body()))
+
 	if err := c.BodyParser(&req); err != nil {
+		log.Printf("Body parser error: %v", err)
 		return c.Status(400).JSON(fiber.Map{
-			"error": "Invalid request body",
+			"error": "Invalid request body: " + err.Error(),
 		})
 	}
 
+	log.Printf("Parsed request - DatabaseID: %s, Data: %+v", req.DatabaseID, req.Data)
+
 	databaseID, err := uuid.Parse(req.DatabaseID)
 	if err != nil {
+		log.Printf("UUID parse error: %v", err)
 		return c.Status(400).JSON(fiber.Map{
 			"error": "Invalid database_id",
 		})
 	}
 
+	log.Printf("Looking for database connection with ID: %s and userID: %s", databaseID, userID)
+
 	// Get database connection info using GORM
 	var connection models.DatabaseConnection
 	if err := config.DB.Where("id = ? AND user_id = ?", databaseID, userID).First(&connection).Error; err != nil {
+		log.Printf("Database connection not found error: %v", err)
 		return c.Status(404).JSON(fiber.Map{
 			"error": "Database connection not found",
 		})
 	}
 
+	log.Printf("Found connection: %+v", connection)
+
 	switch connection.Type {
 	case "mongodb":
+		log.Printf("Processing MongoDB database type: %s", connection.Type)
 		// Connect to MongoDB
 		client, err := h.dbService.ConnectMongoDB(connection)
 		if err != nil {
@@ -575,10 +601,12 @@ func (h *DatabaseManagementHandler) CreateDocument(c *fiber.Ctx) error {
 			"id":      result.InsertedID,
 		})
 
-	case "mysql", "postgresql":
+	case "mysql", "postgresql", "postgres":
+		log.Printf("Processing SQL database type: %s", connection.Type)
 		// For SQL databases, convert map to INSERT statement
 		sqlClient, err := h.dbService.ConnectSQL(connection)
 		if err != nil {
+			log.Printf("SQL connection error: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to database: " + err.Error(),
 			})
@@ -601,20 +629,26 @@ func (h *DatabaseManagementHandler) CreateDocument(c *fiber.Ctx) error {
 			strings.Join(columns, ", "),
 			strings.Join(placeholders, ", "))
 
+		log.Printf("Executing SQL query: %s", query)
+		log.Printf("With values: %+v", values)
+
 		result, err := sqlClient.Exec(query, values...)
 		if err != nil {
+			log.Printf("SQL execution error: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to create record: " + err.Error(),
 			})
 		}
 
 		id, _ := result.LastInsertId()
+		log.Printf("Successfully created record with ID: %d", id)
 		return c.JSON(fiber.Map{
 			"success": true,
 			"id":      id,
 		})
 
 	default:
+		log.Printf("Unsupported database type: %s", connection.Type)
 		return c.Status(400).JSON(fiber.Map{
 			"error": "Unsupported database type",
 		})

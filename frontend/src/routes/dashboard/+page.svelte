@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { apiClient } from '$lib/api';
 	import { user, logout, isAuthenticated, connections } from '$lib/stores';
+	import Navbar from '$lib/components/Navbar.svelte';
 
 	let stats = {
 		totalConnections: 0,
@@ -54,29 +55,13 @@
 			loading = false;
 		}
 	}
-
-	function handleLogout() {
-		logout();
-		goto('/login');
-	}
 </script>
 
 <svelte:head>
 	<title>Dashboard - Database Manager</title>
 </svelte:head>
 
-<nav class="navbar">
-	<div class="container">
-		<a href="/dashboard" class="navbar-brand">Database Manager</a>
-		<div class="navbar-nav">
-			<a href="/dashboard">Dashboard</a>
-			<a href="/connections">Connections</a>
-			<a href="/api-management">API Management</a>
-			<a href="/database-management">Database Management</a>
-			<button class="btn btn-secondary" on:click={handleLogout}>Logout</button>
-		</div>
-	</div>
-</nav>
+<Navbar />
 
 <div class="container">
 	<div class="page-header">

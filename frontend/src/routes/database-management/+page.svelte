@@ -4,6 +4,7 @@
 	import { page } from '$app/stores';
 	import { isAuthenticated, connections } from '$lib/stores';
 	import Input from '$lib/components/Input.svelte';
+	import Navbar from '$lib/components/Navbar.svelte';
 
 	// Main state
 	let selectedConnection = null;
@@ -33,6 +34,7 @@
 	let showDeleteModal = false;
 	let showFilterModal = false;
 	let currentDocument = {};
+	let currentDocumentJSON = '';
 	let documentToDelete = null;
 
 	// Drag functionality for modals
@@ -114,6 +116,12 @@
 			if (response.ok) {
 				const schema = await response.json();
 				availableFields = schema.fields || [];
+				console.log('Schema loaded for', selectedCollection, ':', availableFields);
+				
+				// Update template if create modal is open
+				if (showCreateModal && (!currentDocumentJSON || currentDocumentJSON.trim() === '')) {
+					currentDocumentJSON = generateJSONTemplate(availableFields);
+				}
 			}
 		} catch (err) {
 			console.error('Error loading schema:', err);
@@ -168,28 +176,57 @@
 
 		loading = true;
 		try {
+			let documentData = {};
+			
+			// Always use JSON input
+			if (!currentDocumentJSON || currentDocumentJSON.trim() === '') {
+				error = 'Please enter document data';
+				loading = false;
+				return;
+			}
+			
+			try {
+				documentData = JSON.parse(currentDocumentJSON);
+				console.log('Parsed document data:', documentData);
+			} catch (parseError) {
+				error = 'Invalid JSON format: ' + parseError.message;
+				loading = false;
+				return;
+			}
+
+			const requestBody = {
+				database_id: selectedConnection.id,
+				data: documentData
+			};
+			
+			console.log('Sending request to create document:', requestBody);
+
 			const response = await fetch(`http://localhost:8081/api/database-management/collections/${selectedCollection}/documents`, {
 				method: 'POST',
 				headers: {
 					'Authorization': `Bearer ${localStorage.getItem('token')}`,
 					'Content-Type': 'application/json'
 				},
-				body: JSON.stringify({
-					database_id: selectedConnection.id,
-					data: currentDocument
-				})
+				body: JSON.stringify(requestBody)
 			});
 
+			console.log('Response status:', response.status);
+			
 			if (response.ok) {
+				const result = await response.json();
+				console.log('Create success:', result);
 				success = 'Document created successfully';
 				showCreateModal = false;
 				currentDocument = {};
+				currentDocumentJSON = '';
 				await loadDocuments();
 			} else {
 				const errorData = await response.json();
+				console.error('Create error:', errorData);
 				error = errorData.error || 'Failed to create document';
 			}
 		} catch (err) {
+			console.error('Network error:', err);
 			error = 'Error connecting to server';
 		} finally {
 			loading = false;
@@ -262,7 +299,11 @@
 
 	function openCreateModal() {
 		currentDocument = {};
+		// Generate JSON template based on available fields
+		currentDocumentJSON = generateJSONTemplate(availableFields);
 		showCreateModal = true;
+		// Ensure schema is loaded for current collection
+		loadFieldSchema();
 	}
 
 	function openEditModal(document) {
@@ -325,12 +366,6 @@
 		loadDocuments();
 	}
 
-	function handleLogout() {
-		localStorage.removeItem('token');
-		$isAuthenticated = false;
-		goto('/login');
-	}
-
 	function formatValue(value) {
 		if (value === null || value === undefined) return '-';
 		if (typeof value === 'object') return JSON.stringify(value);
@@ -344,6 +379,47 @@
 			Object.keys(doc).forEach(key => keys.add(key));
 		});
 		return Array.from(keys).filter(key => key !== '_id');
+	}
+
+	function generateJSONTemplate(fields) {
+		if (!fields || fields.length === 0) {
+			return '{\n  "name": "John Doe",\n  "email": "john@example.com"\n}';
+		}
+
+		const template = {};
+		fields.forEach(field => {
+			const fieldLower = field.toLowerCase();
+			
+			if (fieldLower.includes('email')) {
+				template[field] = 'user@example.com';
+			} else if (fieldLower.includes('name')) {
+				template[field] = 'John Doe';
+			} else if (fieldLower.includes('password')) {
+				template[field] = 'password123';
+			} else if (fieldLower.includes('age')) {
+				template[field] = 25;
+			} else if (fieldLower.includes('id') && !fieldLower.includes('_id')) {
+				template[field] = 1;
+			} else if (fieldLower.includes('active') || fieldLower.includes('verified') || fieldLower.includes('is_')) {
+				template[field] = true;
+			} else if (fieldLower.includes('date') || fieldLower.includes('time') || fieldLower.includes('created') || fieldLower.includes('updated')) {
+				template[field] = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+			} else if (fieldLower.includes('phone') || fieldLower.includes('mobile')) {
+				template[field] = '+1234567890';
+			} else if (fieldLower.includes('address')) {
+				template[field] = '123 Main Street, City, Country';
+			} else if (fieldLower.includes('role')) {
+				template[field] = 'user';
+			} else if (fieldLower.includes('status')) {
+				template[field] = 'active';
+			} else if (fieldLower.includes('count') || fieldLower.includes('number') || fieldLower.includes('price') || fieldLower.includes('amount')) {
+				template[field] = 100;
+			} else {
+				template[field] = 'sample_value';
+			}
+		});
+
+		return JSON.stringify(template, null, 2);
 	}
 
 	// Drag functionality for Create Modal
@@ -537,18 +613,7 @@
 	<title>Database Management - Database Manager</title>
 </svelte:head>
 
-<nav class="navbar">
-	<div class="container">
-		<a href="/dashboard" class="navbar-brand">Database Manager</a>
-		<div class="navbar-nav">
-			<a href="/dashboard">Dashboard</a>
-			<a href="/connections">Connections</a>
-			<a href="/api-management">API Management</a>
-			<a href="/database-management" class="active">Database Management</a>
-			<button class="btn btn-secondary" on:click={handleLogout}>Logout</button>
-		</div>
-	</div>
-</nav>
+<Navbar />
 
 <div class="container">
 	<div class="page-header">
@@ -663,61 +728,63 @@
 					{#if loading}
 						<div class="loading">Loading documents...</div>
 					{:else if documents.length > 0}
-						<div class="table-container">
-							<table class="documents-table">
-								<thead>
-									<tr>
-										{#each getDocumentKeys(documents) as key}
-											<th>
-												<button 
-													class="sort-header"
-													on:click={() => {
-														if (sortField === key) {
-															sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
-														} else {
-															sortField = key;
-															sortOrder = 'asc';
-														}
-														loadDocuments();
-													}}
-												>
-													{key}
-													{#if sortField === key}
-														{sortOrder === 'asc' ? '↑' : '↓'}
-													{/if}
-												</button>
-											</th>
-										{/each}
-										<th>Actions</th>
-									</tr>
-								</thead>
-								<tbody>
-									{#each documents as document}
+						<div class="table-wrapper">
+							<div class="table-container">
+								<table class="documents-table">
+									<thead>
 										<tr>
 											{#each getDocumentKeys(documents) as key}
-												<td>{formatValue(document[key])}</td>
+												<th>
+													<button 
+														class="sort-header"
+														on:click={() => {
+															if (sortField === key) {
+																sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
+															} else {
+																sortField = key;
+																sortOrder = 'asc';
+															}
+															loadDocuments();
+														}}
+													>
+														{key}
+														{#if sortField === key}
+															{sortOrder === 'asc' ? '↑' : '↓'}
+														{/if}
+													</button>
+												</th>
 											{/each}
-											<td>
-												<div class="action-buttons">
-													<button 
-														class="btn btn-sm btn-info"
-														on:click={() => openEditModal(document)}
-													>
-														✏️ Edit
-													</button>
-													<button 
-														class="btn btn-sm btn-danger"
-														on:click={() => openDeleteModal(document)}
-													>
-														🗑️ Delete
-													</button>
-												</div>
-											</td>
+											<th class="actions-column">Actions</th>
+										</tr>
+									</thead>
+									<tbody>
+										{#each documents as document}
+											<tr>
+												{#each getDocumentKeys(documents) as key}
+													<td class="data-cell">{formatValue(document[key])}</td>
+												{/each}
+												<td class="actions-cell">
+													<div class="action-buttons">
+														<button 
+															class="btn btn-sm btn-info"
+															on:click={() => openEditModal(document)}
+														>
+															✏️ Edit
+														</button>
+														<button 
+															class="btn btn-sm btn-danger"
+															on:click={() => openDeleteModal(document)}
+														>
+															🗑️ Delete
+														</button>
+													</div>
+												</td>
 										</tr>
 									{/each}
 								</tbody>
 							</table>
 						</div>
+					</div>
 
 						<!-- Pagination -->
 						{#if totalPages > 1}
@@ -802,13 +869,20 @@
 			<div class="form-group">
 				<label class="form-label">Document Data (JSON)</label>
 				<textarea
-					bind:value={currentDocument}
+					bind:value={currentDocumentJSON}
 					class="form-textarea"
-					placeholder={'{"name": "John Doe", "email": "john@example.com"}'}
-					rows="8"
+					placeholder={generateJSONTemplate(availableFields)}
+					rows="12"
 					required
 				></textarea>
-				<small class="form-help">Enter valid JSON data for the document</small>
+				<small class="form-help">
+					{#if availableFields && availableFields.length > 0}
+						Template generated for collection: <strong>{selectedCollection}</strong><br>
+						Available fields: <em>{availableFields.join(', ')}</em>
+					{:else}
+						Enter valid JSON data for the document
+					{/if}
+				</small>
 			</div>
 
 			<div class="form-actions">
@@ -983,46 +1057,6 @@
 		font-size: 1.1rem;
 		color: #666;
 		margin: 8px 0 0 0;
-	}
-
-	/* Navigation */
-	.navbar {
-		background: linear-gradient(135deg, #667eea, #764ba2);
-		padding: 1rem 0;
-		margin-bottom: 2rem;
-	}
-
-	.navbar .container {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		max-width: 1200px;
-	}
-
-	.navbar-brand {
-		font-size: 1.5rem;
-		font-weight: 700;
-		color: white;
-		text-decoration: none;
-	}
-
-	.navbar-nav {
-		display: flex;
-		gap: 2rem;
-		align-items: center;
-	}
-
-	.navbar-nav a {
-		color: rgba(255, 255, 255, 0.9);
-		text-decoration: none;
-		font-weight: 500;
-		transition: color 0.2s;
-	}
-
-	.navbar-nav a:hover,
-	.navbar-nav a.active {
-		color: white;
-		text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
 	}
 
 	/* No Connection State */
@@ -1205,15 +1239,26 @@
 	}
 
 	/* Table */
+	.table-wrapper {
+		background: white;
+		border-radius: 8px;
+		box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+		overflow: hidden;
+		margin-bottom: 1.5rem;
+	}
+
 	.table-container {
 		overflow-x: auto;
-		margin-bottom: 1.5rem;
+		max-width: 100%;
+		-webkit-overflow-scrolling: touch; /* Smooth scrolling on mobile */
 	}
 
 	.documents-table {
 		width: 100%;
+		min-width: 800px; /* Increased minimum width for better layout */
 		border-collapse: collapse;
 		background: white;
+		table-layout: auto; /* Allow flexible column sizing */
 	}
 
 	.documents-table th,
@@ -1221,6 +1266,7 @@
 		padding: 0.75rem;
 		text-align: left;
 		border-bottom: 1px solid #e2e8f0;
+		vertical-align: top;
 	}
 
 	.documents-table th {
@@ -1250,6 +1296,72 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.data-cell {
+		min-width: 100px;
+		max-width: 200px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		cursor: pointer;
+		position: relative;
+	}
+
+	.data-cell:hover {
+		background-color: #f7fafc;
+		overflow: visible;
+		white-space: normal;
+		word-wrap: break-word;
+		position: relative;
+		z-index: 10;
+	}
+
+	/* Make sure table container has proper scrolling */
+	.table-container {
+		overflow-x: auto;
+		overflow-y: visible;
+		max-width: 100%;
+		-webkit-overflow-scrolling: touch;
+		border: 1px solid #e2e8f0;
+		border-radius: 8px;
+	}
+
+	.actions-column {
+		width: 150px;
+		min-width: 150px;
+		text-align: center;
+		position: sticky;
+		right: 0;
+		background: #f8f9fa;
+		border-left: 1px solid #e2e8f0;
+		z-index: 5;
+	}
+
+	.actions-cell {
+		width: 150px;
+		min-width: 150px;
+		text-align: center;
+		position: sticky;
+		right: 0;
+		background: white;
+		border-left: 1px solid #e2e8f0;
+		z-index: 5;
+	}
+
+	.action-buttons {
+		display: flex;
+		gap: 0.5rem;
+		justify-content: center;
+		align-items: center;
+		flex-wrap: nowrap;
+	}
+
+	.action-buttons .btn {
+		font-size: 0.8rem;
+		padding: 0.25rem 0.5rem;
+		white-space: nowrap;
+		min-width: auto;
 	}
 
 	/* Pagination */
@@ -1284,13 +1396,6 @@
 	.no-documents h3 {
 		color: #333;
 		margin-bottom: 1rem;
-	}
-
-	/* Action Buttons */
-	.action-buttons {
-		display: flex;
-		gap: 0.5rem;
-		justify-content: flex-start;
 	}
 
 	/* Buttons */
@@ -1611,6 +1716,78 @@
 		:global(.modal-content) {
 			width: 95vw;
 			margin: 20px;
+		}
+
+		/* Table Responsive */
+		.table-wrapper {
+			margin: 0 -0.5rem;
+			border-radius: 0;
+		}
+
+		.table-container {
+			-webkit-overflow-scrolling: touch;
+			border-radius: 0;
+		}
+
+		.documents-table {
+			min-width: 700px;
+			font-size: 0.9rem;
+		}
+
+		.documents-table th,
+		.documents-table td {
+			padding: 0.5rem 0.4rem;
+		}
+
+		.data-cell {
+			min-width: 80px;
+			max-width: 120px;
+			font-size: 0.85rem;
+		}
+
+		.actions-column,
+		.actions-cell {
+			width: 120px;
+			min-width: 120px;
+		}
+
+		.action-buttons {
+			flex-direction: column;
+			gap: 0.2rem;
+		}
+
+		.action-buttons .btn {
+			font-size: 0.7rem;
+			padding: 0.2rem 0.3rem;
+		}
+	}
+
+	@media (max-width: 480px) {
+		.documents-table {
+			min-width: 600px;
+			font-size: 0.8rem;
+		}
+
+		.documents-table th,
+		.documents-table td {
+			padding: 0.4rem 0.3rem;
+		}
+
+		.data-cell {
+			min-width: 70px;
+			max-width: 100px;
+			font-size: 0.75rem;
+		}
+
+		.actions-column,
+		.actions-cell {
+			width: 100px;
+			min-width: 100px;
+		}
+
+		.action-buttons .btn {
+			font-size: 0.65rem;
+			padding: 0.15rem 0.25rem;
 		}
 	}
 </style>

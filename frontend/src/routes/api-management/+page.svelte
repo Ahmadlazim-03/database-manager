@@ -3,7 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { apiClient } from '$lib/api';
-	import { isAuthenticated, connections, apiKeys, endpoints, logs, logout } from '$lib/stores';
+	import { isAuthenticated, connections, apiKeys, endpoints, logs, logout, user } from '$lib/stores';
+	import Navbar from '$lib/components/Navbar.svelte';
 
 	let activeTab = 'keys';
 	let loading = false;
@@ -677,17 +678,7 @@ curl -X ${endpoint.method} "${url}" \\
 	<title>API Management - Database Manager</title>
 </svelte:head>
 
-<nav class="navbar">
-	<div class="container">
-		<a href="/dashboard" class="navbar-brand">Database Manager</a>
-		<div class="navbar-nav">
-			<a href="/dashboard">Dashboard</a>
-			<a href="/connections">Connections</a>
-			<a href="/api-management" class="active">API Management</a>
-			<button class="btn btn-secondary" on:click={handleLogout}>Logout</button>
-		</div>
-	</div>
-</nav>
+<Navbar {user} {handleLogout} />
 
 <div class="container">
 	<div class="page-header">
@@ -1484,10 +1475,6 @@ curl -X ${endpoint.method} "${url}" \\
 	.empty-state p {
 		margin-bottom: 20px;
 		font-size: 1.1rem;
-	}
-
-	.navbar-nav .active {
-		background-color: rgba(255, 255, 255, 0.2);
 	}
 
 	.action-buttons {

@@ -315,7 +315,7 @@ func (ds *DatabaseService) ConnectSQL(connection models.DatabaseConnection) (*sq
 		driver = "mysql"
 		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
 			connection.Username, connection.Password, connection.Host, connection.Port, connection.Database)
-	case "postgresql":
+	case "postgresql", "postgres":
 		driver = "postgres"
 		dsn = fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=disable",
 			connection.Host, connection.Username, connection.Password, connection.Database, connection.Port)

@@ -40,7 +40,6 @@ declare module '$env/static/private' {
 	export const DriverData: string;
 	export const EDITOR: string;
 	export const GIT_ASKPASS: string;
-	export const GIT_PAGER: string;
 	export const GOOGLE_API_KEY: string;
 	export const GOPATH: string;
 	export const HOME: string;
@@ -161,7 +160,6 @@ declare module '$env/dynamic/private' {
 		DriverData: string;
 		EDITOR: string;
 		GIT_ASKPASS: string;
-		GIT_PAGER: string;
 		GOOGLE_API_KEY: string;
 		GOPATH: string;
 		HOME: string;
