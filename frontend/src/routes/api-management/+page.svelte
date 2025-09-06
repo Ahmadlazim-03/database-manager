@@ -238,7 +238,7 @@
 	function generateCodeExample(endpoint, language = 'javascript') {
 		if (!endpoint) return '';
 
-		const baseUrl = 'http://localhost:8081';
+		const baseUrl = 'http://localhost:8080';
 		const url = `${baseUrl}${endpoint.path}`;
 		const collection = endpoint.collection;
 		
