@@ -4,6 +4,7 @@
 	import { page } from '$app/stores';
 	import { isAuthenticated, connections } from '$lib/stores';
 	import { apiClient } from '$lib/api';
+	import { config } from '$lib/config.js';
 	import Input from '$lib/components/Input.svelte';
 	import Navbar from '$lib/components/Navbar.svelte';
 	import ShareDatabaseModal from '$lib/components/ShareDatabaseModal.svelte';
@@ -134,7 +135,7 @@
 	async function loadConnections() {
 		try {
 			console.log('📡 Fetching connections from /api/database...');
-			const response = await fetch('http://localhost:8081/api/database', {
+			const response = await fetch(config.getApiUrl('/database'), {
 				headers: {
 					'Authorization': `Bearer ${localStorage.getItem('token')}`
 				}
@@ -198,7 +199,7 @@
 
 		loading = true;
 		try {
-			const response = await fetch(`http://localhost:8081/api/database-management/collections?database_id=${selectedConnection.id}`, {
+			const response = await fetch(config.getApiUrl(`/database-management/collections?database_id=${selectedConnection.id}`), {
 				headers: {
 					'Authorization': `Bearer ${localStorage.getItem('token')}`
 				}
@@ -227,7 +228,7 @@
 		if (!selectedConnection || !selectedCollection) return;
 
 		try {
-			const response = await fetch(`http://localhost:8081/api/database-management/collections/${selectedCollection}/schema?database_id=${selectedConnection.id}`, {
+			const response = await fetch(config.getApiUrl(`/database-management/collections/${selectedCollection}/schema?database_id=${selectedConnection.id}`), {
 				headers: {
 					'Authorization': `Bearer ${localStorage.getItem('token')}`
 				}
@@ -407,7 +408,7 @@
 				if (value) queryParams.append(`filter_${key}`, value);
 			});
 
-			const response = await fetch(`http://localhost:8081/api/database-management/collections/${selectedCollection}/documents?${queryParams}`, {
+			const response = await fetch(config.getApiUrl(`/database-management/collections/${selectedCollection}/documents?${queryParams}`), {
 				headers: {
 					'Authorization': `Bearer ${localStorage.getItem('token')}`
 				}
@@ -460,7 +461,7 @@
 			
 			console.log('Sending request to create document:', requestBody);
 
-			const response = await fetch(`http://localhost:8081/api/database-management/collections/${selectedCollection}/documents`, {
+			const response = await fetch(config.getApiUrl(`/database-management/collections/${selectedCollection}/documents`), {
 				method: 'POST',
 				headers: {
 					'Authorization': `Bearer ${localStorage.getItem('token')}`,
@@ -497,7 +498,7 @@
 
 		loading = true;
 		try {
-			const response = await fetch(`http://localhost:8081/api/database-management/collections/${selectedCollection}/documents/${currentDocument.id}`, {
+			const response = await fetch(config.getApiUrl(`/database-management/collections/${selectedCollection}/documents/${currentDocument.id}`), {
 				method: 'PUT',
 				headers: {
 					'Authorization': `Bearer ${localStorage.getItem('token')}`,
@@ -529,7 +530,7 @@
 
 		loading = true;
 		try {
-			const response = await fetch(`http://localhost:8081/api/database-management/collections/${selectedCollection}/documents/${documentToDelete.id}`, {
+			const response = await fetch(config.getApiUrl(`/database-management/collections/${selectedCollection}/documents/${documentToDelete.id}`), {
 				method: 'DELETE',
 				headers: {
 					'Authorization': `Bearer ${localStorage.getItem('token')}`,

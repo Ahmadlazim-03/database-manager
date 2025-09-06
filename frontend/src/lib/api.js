@@ -1,6 +1,8 @@
 import axios from 'axios';
+import { config } from './config.js';
 
-const API_BASE_URL = 'http://localhost:8080/api';
+// Use environment-based API configuration
+const API_BASE_URL = config.getApiUrl();
 
 class ApiClient {
     constructor() {

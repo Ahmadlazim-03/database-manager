@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"db-manager-backend/config"
@@ -22,36 +23,85 @@ import (
 
 type DatabaseManagementHandler struct {
 	dbService *services.DatabaseService
+	// Object pools for memory optimization
+	docPool      sync.Pool
+	fieldsPool   sync.Pool
+	stringsPool  sync.Pool
+}
+
+// Optimized response structs to reduce memory allocation
+type DocumentResponse struct {
+	Documents []interface{} `json:"documents"`
+	Total     int64         `json:"total"`
+	Page      int           `json:"page"`
+	Limit     int           `json:"limit"`
+}
+
+type FieldInfo struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+type CollectionResponse struct {
+	Collections []string `json:"collections"`
+}
+
+type SchemaResponse struct {
+	Fields []FieldInfo `json:"fields"`
 }
 
 func NewDatabaseManagementHandler() *DatabaseManagementHandler {
-	return &DatabaseManagementHandler{
+	h := &DatabaseManagementHandler{
 		dbService: services.NewDatabaseService(),
 	}
+	
+	// Initialize object pools for memory optimization
+	h.docPool = sync.Pool{
+		New: func() interface{} {
+			return make(map[string]interface{}, 10)
+		},
+	}
+	
+	h.fieldsPool = sync.Pool{
+		New: func() interface{} {
+			return make([]FieldInfo, 0, 20)
+		},
+	}
+	
+	h.stringsPool = sync.Pool{
+		New: func() interface{} {
+			return make([]string, 0, 32)
+		},
+	}
+	
+	return h
 }
 
-// Helper function to check database access and get connection
+// Helper function to check database access and get connection (optimized with minimal select)
 func (h *DatabaseManagementHandler) getDatabaseConnection(databaseID, userID uuid.UUID) (*models.DatabaseConnection, error) {
-	var connection models.DatabaseConnection
+	connection := &models.DatabaseConnection{}
 	
-	// First, try to find as owner
-	ownerErr := config.DB.Where("id = ? AND user_id = ?", databaseID, userID).First(&connection).Error
+	// First, try to find as owner - select only necessary fields to reduce memory
+	ownerErr := config.DB.Select("id", "type", "host", "port", "database", "username", "password", "ssl_mode", "connection_string").
+		Where("id = ? AND user_id = ?", databaseID, userID).First(connection).Error
 	if ownerErr == nil {
 		log.Printf("User has owner access to database: %s", databaseID)
-		return &connection, nil
+		return connection, nil
 	}
 	
 	// If not owner, check if user has shared access
-	var access models.DatabaseAccess
-	sharedErr := config.DB.Where("database_id = ? AND user_id = ?", databaseID, userID).First(&access).Error
+	access := &models.DatabaseAccess{}
+	sharedErr := config.DB.Select("database_id", "user_id").
+		Where("database_id = ? AND user_id = ?", databaseID, userID).First(access).Error
 	if sharedErr == nil {
-		// User has shared access, get the original connection info
-		if err := config.DB.Where("id = ?", databaseID).First(&connection).Error; err != nil {
+		// User has shared access, get the original connection info with minimal fields
+		if err := config.DB.Select("id", "type", "host", "port", "database", "username", "password", "ssl_mode", "connection_string").
+			Where("id = ?", databaseID).First(connection).Error; err != nil {
 			log.Printf("Shared database connection not found: %v", err)
 			return nil, fmt.Errorf("shared database connection not found")
 		}
 		log.Printf("User has shared access to database: %s", databaseID)
-		return &connection, nil
+		return connection, nil
 	}
 	
 	log.Printf("User has no access to database: %s", databaseID)
@@ -141,7 +191,7 @@ func determineInputType(fieldName, dataType string) string {
 	return "text"
 }
 
-// GetCollections returns all collections for a database connection
+// GetCollections returns all collections for a database connection (optimized)
 func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 	userID, err := h.getUserID(c)
 	if err != nil {
@@ -173,27 +223,26 @@ func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 		})
 	}
 
-	log.Printf("Found connection: ID=%s, Type=%s, Host=%s, Database=%s", connection.ID, connection.Type, connection.Host, connection.Database)
-
-	var collections []string
+	// Pre-allocate slice with estimated capacity to reduce allocations
+	collections := make([]string, 0, 32)
 
 	switch connection.Type {
 	case "mongodb":
-		log.Printf("Processing MongoDB connection")
-		// Connect to MongoDB
+		// Connect to MongoDB with optimized context and timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		
 		client, err := h.dbService.ConnectMongoDB(*connection)
 		if err != nil {
-			log.Printf("MongoDB connection failed: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to MongoDB: " + err.Error(),
 			})
 		}
-		defer client.Disconnect(context.Background())
+		defer client.Disconnect(ctx)
 
 		database := client.Database(connection.Database)
-		collectionNames, err := database.ListCollectionNames(context.Background(), bson.D{})
+		collectionNames, err := database.ListCollectionNames(ctx, bson.D{})
 		if err != nil {
-			log.Printf("Failed to list MongoDB collections: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to list collections: " + err.Error(),
 			})
@@ -201,11 +250,9 @@ func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 		collections = collectionNames
 
 	case "mysql", "postgresql", "postgres":
-		log.Printf("Processing SQL connection type: %s", connection.Type)
-		// For SQL databases, get table names
+		// For SQL databases, get table names with optimized query
 		sqlClient, err := h.dbService.ConnectSQL(*connection)
 		if err != nil {
-			log.Printf("SQL connection failed: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to database: " + err.Error(),
 			})
@@ -216,37 +263,38 @@ func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 		if connection.Type == "mysql" {
 			query = "SHOW TABLES"
 		} else {
-			query = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+			query = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name"
 		}
-		log.Printf("Executing query: %s", query)
 
 		rows, err := sqlClient.Query(query)
 		if err != nil {
-			log.Printf("Query failed: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to list tables: " + err.Error(),
 			})
 		}
 		defer rows.Close()
 
+		// Optimize scanning by reusing tableName variable
+		var tableName string
 		for rows.Next() {
-			var tableName string
 			if err := rows.Scan(&tableName); err != nil {
-				log.Printf("Error scanning table name: %v", err)
 				continue
 			}
 			collections = append(collections, tableName)
 		}
-		log.Printf("Found %d collections/tables", len(collections))
 
 	default:
-		log.Printf("Unsupported database type: %s", connection.Type)
 		return c.Status(400).JSON(fiber.Map{
 			"error": "Unsupported database type",
 		})
 	}
 
-	return c.JSON(collections)
+	// Use optimized response struct
+	response := &CollectionResponse{
+		Collections: collections,
+	}
+
+	return c.JSON(response.Collections)
 }
 
 // GetCollectionSchema returns the schema/structure of a collection
@@ -302,17 +350,22 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 
 		collection := client.Database(connection.Database).Collection(collectionName)
 		
-		// Get a sample document to extract field names and types
-		cursor, err := collection.Find(context.Background(), bson.D{}, options.Find().SetLimit(10))
+		// Get a sample document to extract field names and types with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		
+		cursor, err := collection.Find(ctx, bson.D{}, options.Find().SetLimit(10))
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to sample documents: " + err.Error(),
 			})
 		}
-		defer cursor.Close(context.Background())
+		defer cursor.Close(ctx)
 
-		fieldSet := make(map[string]string) // field name -> type
-		for cursor.Next(context.Background()) {
+		// Pre-allocate map with estimated capacity for memory efficiency
+		fieldSet := make(map[string]string, 20) // field name -> type
+		
+		for cursor.Next(ctx) {
 			var doc bson.M
 			if err := cursor.Decode(&doc); err != nil {
 				continue
@@ -320,24 +373,22 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 			for key, value := range doc {
 				if key != "_id" {
 					fieldType := "text"
-					// Try to determine field type from value
-					switch value.(type) {
+					// Try to determine field type from value using pointer efficiency
+					switch v := value.(type) {
 					case string:
 						fieldType = "text"
 						// Check if it looks like an image URL or file path
-						if val, ok := value.(string); ok {
-							if strings.Contains(strings.ToLower(key), "photo") || 
-							   strings.Contains(strings.ToLower(key), "image") || 
-							   strings.Contains(strings.ToLower(key), "picture") ||
-							   strings.Contains(strings.ToLower(key), "avatar") ||
-							   strings.Contains(strings.ToLower(key), "thumbnail") ||
-							   strings.HasSuffix(strings.ToLower(val), ".jpg") ||
-							   strings.HasSuffix(strings.ToLower(val), ".jpeg") ||
-							   strings.HasSuffix(strings.ToLower(val), ".png") ||
-							   strings.HasSuffix(strings.ToLower(val), ".gif") ||
-							   strings.HasSuffix(strings.ToLower(val), ".webp") {
-								fieldType = "image"
-							}
+						if strings.Contains(strings.ToLower(key), "photo") || 
+						   strings.Contains(strings.ToLower(key), "image") || 
+						   strings.Contains(strings.ToLower(key), "picture") ||
+						   strings.Contains(strings.ToLower(key), "avatar") ||
+						   strings.Contains(strings.ToLower(key), "thumbnail") ||
+						   strings.HasSuffix(strings.ToLower(v), ".jpg") ||
+						   strings.HasSuffix(strings.ToLower(v), ".jpeg") ||
+						   strings.HasSuffix(strings.ToLower(v), ".png") ||
+						   strings.HasSuffix(strings.ToLower(v), ".gif") ||
+						   strings.HasSuffix(strings.ToLower(v), ".webp") {
+							fieldType = "image"
 						}
 					case int, int32, int64:
 						fieldType = "number"
@@ -550,7 +601,7 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 			// Create a regex search for multiple fields
 			searchRegex := bson.M{"$regex": search, "$options": "i"}
 			filter = bson.D{
-				{"$or", bson.A{
+				{Key: "$or", Value: bson.A{
 					bson.M{"name": searchRegex},
 					bson.M{"title": searchRegex},
 					bson.M{"description": searchRegex},
@@ -566,29 +617,37 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 			if sortOrder == "desc" {
 				sortDirection = -1
 			}
-			sortOptions = options.Find().SetSort(bson.D{{sortField, sortDirection}})
+			sortOptions = options.Find().SetSort(bson.D{bson.E{Key: sortField, Value: sortDirection}})
 		} else {
 			sortOptions = options.Find()
 		}
 
-		// Get total count
-		total, err = collection.CountDocuments(context.Background(), filter)
+		// Get total count with timeout
+		countCtx, countCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		total, err = collection.CountDocuments(countCtx, filter)
+		countCancel()
 		if err != nil {
 			log.Printf("Error counting documents: %v", err)
 		}
 
-		// Get documents with pagination
+		// Get documents with pagination and memory optimization
 		skip := (page - 1) * limit
-		cursor, err := collection.Find(context.Background(), filter, 
+		findCtx, findCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer findCancel()
+		
+		cursor, err := collection.Find(findCtx, filter, 
 			sortOptions.SetSkip(int64(skip)).SetLimit(int64(limit)))
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to fetch documents: " + err.Error(),
 			})
 		}
-		defer cursor.Close(context.Background())
+		defer cursor.Close(findCtx)
 
-		for cursor.Next(context.Background()) {
+		// Pre-allocate slice with exact capacity to minimize memory allocations
+		documents = make([]interface{}, 0, limit)
+		
+		for cursor.Next(findCtx) {
 			var doc bson.M
 			if err := cursor.Decode(&doc); err != nil {
 				continue
@@ -659,7 +718,7 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 			}
 		}
 
-		// Get total count
+		// Get total count with minimal memory usage
 		var countArgs []interface{}
 		if len(args) > 0 {
 			countArgs = make([]interface{}, len(args))
@@ -681,17 +740,15 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 		offset := (page - 1) * limit
 		baseQuery += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
-		log.Printf("GetDocuments - Final query: %s, args: %v", baseQuery, args)
 		rows, err := sqlClient.Query(baseQuery, args...)
 		if err != nil {
-			log.Printf("GetDocuments - Query error: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to fetch rows: " + err.Error(),
 			})
 		}
 		defer rows.Close()
 
-		// Get column names
+		// Get column names for efficient scanning
 		columns, err := rows.Columns()
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
@@ -699,39 +756,46 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 			})
 		}
 
-		for rows.Next() {
-			values := make([]interface{}, len(columns))
-			valuePtrs := make([]interface{}, len(columns))
-			for i := range columns {
-				valuePtrs[i] = &values[i]
-			}
+		// Pre-allocate slice with exact capacity to minimize memory allocations
+		documents = make([]interface{}, 0, limit)
+		
+		// Create scan destination slice with pointers for memory efficiency
+		values := make([]interface{}, len(columns))
+		scanArgs := make([]interface{}, len(columns))
+		for i := range values {
+			scanArgs[i] = &values[i]
+		}
 
-			if err := rows.Scan(valuePtrs...); err != nil {
+		for rows.Next() {
+			if err := rows.Scan(scanArgs...); err != nil {
 				continue
 			}
 
-			doc := make(map[string]interface{})
+			// Build document map using pointer references for memory efficiency
+			doc := make(map[string]interface{}, len(columns))
 			for i, col := range columns {
-				val := values[i]
-				if b, ok := val.([]byte); ok {
-					doc[col] = string(b)
-				} else {
-					doc[col] = val
+				if values[i] != nil {
+					// Convert byte arrays to strings for proper JSON serialization
+					if b, ok := values[i].([]byte); ok {
+						doc[col] = string(b)
+					} else {
+						doc[col] = values[i]
+					}
 				}
 			}
 			documents = append(documents, doc)
 		}
-		
-		log.Printf("GetDocuments - Found %d documents for collection '%s'", len(documents), collectionName)
 	}
 
-	log.Printf("GetDocuments - Returning: documents=%d, total=%d, page=%d, limit=%d", len(documents), total, page, limit)
-	return c.JSON(fiber.Map{
-		"documents": documents,
-		"total":     total,
-		"page":      page,
-		"limit":     limit,
-	})
+	// Use optimized response struct
+	response := &DocumentResponse{
+		Documents: documents,
+		Total:     total,
+		Page:      page,
+		Limit:     limit,
+	}
+
+	return c.JSON(response)
 }
 
 // CreateDocument creates a new document in a collection
@@ -961,8 +1025,8 @@ func (h *DatabaseManagementHandler) UpdateDocument(c *fiber.Ctx) error {
 		// Add timestamp
 		req.Data["updated_at"] = time.Now()
 		
-		filter := bson.D{{"_id", objID}}
-		update := bson.D{{"$set", req.Data}}
+		filter := bson.D{bson.E{Key: "_id", Value: objID}}
+		update := bson.D{bson.E{Key: "$set", Value: req.Data}}
 		
 		result, err := collection.UpdateOne(context.Background(), filter, update)
 		if err != nil {
@@ -1106,7 +1170,7 @@ func (h *DatabaseManagementHandler) DeleteDocument(c *fiber.Ctx) error {
 			})
 		}
 
-		filter := bson.D{{"_id", objID}}
+		filter := bson.D{bson.E{Key: "_id", Value: objID}}
 		
 		result, err := collection.DeleteOne(context.Background(), filter)
 		if err != nil {

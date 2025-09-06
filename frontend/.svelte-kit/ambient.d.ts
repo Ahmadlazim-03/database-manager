@@ -26,6 +26,9 @@
  * ```
  */
 declare module '$env/static/private' {
+	export const VITE_BACKEND_PORT: string;
+	export const VITE_API_BASE_URL: string;
+	export const VITE_FRONTEND_PORT: string;
 	export const ALLUSERSPROFILE: string;
 	export const APPDATA: string;
 	export const ChocolateyInstall: string;
@@ -146,6 +149,9 @@ declare module '$env/static/public' {
  */
 declare module '$env/dynamic/private' {
 	export const env: {
+		VITE_BACKEND_PORT: string;
+		VITE_API_BASE_URL: string;
+		VITE_FRONTEND_PORT: string;
 		ALLUSERSPROFILE: string;
 		APPDATA: string;
 		ChocolateyInstall: string;
