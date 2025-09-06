@@ -117,10 +117,12 @@
 				const schema = await response.json();
 				availableFields = schema.fields || [];
 				console.log('Schema loaded for', selectedCollection, ':', availableFields);
+				console.log('availableFields updated to:', availableFields);
 				
 				// Update template if create modal is open
 				if (showCreateModal && (!currentDocumentJSON || currentDocumentJSON.trim() === '')) {
 					currentDocumentJSON = generateJSONTemplate(availableFields);
+					console.log('Generated template:', currentDocumentJSON);
 				}
 			}
 		} catch (err) {
@@ -297,13 +299,15 @@
 		}
 	}
 
-	function openCreateModal() {
+	async function openCreateModal() {
 		currentDocument = {};
+		showCreateModal = true;
+		// Load schema first, then generate template
+		await loadFieldSchema();
 		// Generate JSON template based on available fields
 		currentDocumentJSON = generateJSONTemplate(availableFields);
-		showCreateModal = true;
-		// Ensure schema is loaded for current collection
-		loadFieldSchema();
+		console.log('openCreateModal - availableFields:', availableFields);
+		console.log('openCreateModal - generated template:', currentDocumentJSON);
 	}
 
 	function openEditModal(document) {
@@ -391,15 +395,22 @@
 			const fieldLower = field.toLowerCase();
 			
 			if (fieldLower.includes('email')) {
-				template[field] = 'user@example.com';
-			} else if (fieldLower.includes('name')) {
+				const timestamp = Date.now();
+				template[field] = `user${timestamp}@example.com`;
+			} else if (fieldLower.includes('nama') || fieldLower.includes('name')) {
 				template[field] = 'John Doe';
+			} else if (fieldLower.includes('nim') || fieldLower.includes('nip')) {
+				template[field] = '1234567890';
+			} else if (fieldLower.includes('jurusan') || fieldLower.includes('department')) {
+				template[field] = 'Computer Science';
+			} else if (fieldLower.includes('angkatan') || fieldLower.includes('year')) {
+				template[field] = 2024;
 			} else if (fieldLower.includes('password')) {
 				template[field] = 'password123';
 			} else if (fieldLower.includes('age')) {
 				template[field] = 25;
-			} else if (fieldLower.includes('id') && !fieldLower.includes('_id')) {
-				template[field] = 1;
+			} else if (fieldLower === 'id' || fieldLower.endsWith('_id')) {
+				template[field] = Math.floor(Math.random() * 10000) + 1;
 			} else if (fieldLower.includes('active') || fieldLower.includes('verified') || fieldLower.includes('is_')) {
 				template[field] = true;
 			} else if (fieldLower.includes('date') || fieldLower.includes('time') || fieldLower.includes('created') || fieldLower.includes('updated')) {
@@ -415,7 +426,12 @@
 			} else if (fieldLower.includes('count') || fieldLower.includes('number') || fieldLower.includes('price') || fieldLower.includes('amount')) {
 				template[field] = 100;
 			} else {
-				template[field] = 'sample_value';
+				// For unknown fields, use appropriate default based on common patterns
+				if (fieldLower.length <= 5 && (fieldLower.includes('id') || /^\d+$/.test(fieldLower))) {
+					template[field] = Math.floor(Math.random() * 1000) + 1;
+				} else {
+					template[field] = 'sample_value';
+				}
 			}
 		});
 

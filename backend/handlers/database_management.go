@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"strconv"
@@ -232,7 +233,7 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 			fields = append(fields, field)
 		}
 
-	case "mysql", "postgresql":
+	case "mysql", "postgresql", "postgres":
 		// Get column names for SQL tables
 		sqlClient, err := h.dbService.ConnectSQL(connection)
 		if err != nil {
@@ -246,39 +247,94 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 		if connection.Type == "mysql" {
 			query = fmt.Sprintf("DESCRIBE %s", collectionName)
 		} else {
+			// PostgreSQL is case-sensitive, try both original and lowercase
 			query = fmt.Sprintf(`
 				SELECT column_name 
 				FROM information_schema.columns 
 				WHERE table_name = '%s' AND table_schema = 'public'
 			`, collectionName)
+			
+			// Also try lowercase version
+			queryLower := fmt.Sprintf(`
+				SELECT column_name 
+				FROM information_schema.columns 
+				WHERE table_name = '%s' AND table_schema = 'public'
+			`, strings.ToLower(collectionName))
+			
+			log.Printf("Will try both queries - original: %s, lowercase: %s", query, queryLower)
 		}
+
+		log.Printf("Executing schema query for table '%s': %s", collectionName, query)
 
 		rows, err := sqlClient.Query(query)
 		if err != nil {
+			log.Printf("Query error for table '%s': %v", collectionName, err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to get table schema: " + err.Error(),
 			})
 		}
 		defer rows.Close()
 
+		// Check if we got any results, if not try lowercase for PostgreSQL
+		fieldCount := 0
 		if connection.Type == "mysql" {
 			for rows.Next() {
-				var field, fieldType, null, key, defaultVal, extra string
+				var field, fieldType, null, key, extra string
+				var defaultVal sql.NullString // Use sql.NullString for nullable columns
 				if err := rows.Scan(&field, &fieldType, &null, &key, &defaultVal, &extra); err != nil {
+					log.Printf("Error scanning MySQL row: %v", err)
 					continue
 				}
+				log.Printf("Found MySQL field: %s", field)
 				fields = append(fields, field)
+				fieldCount++
 			}
 		} else {
 			for rows.Next() {
 				var field string
 				if err := rows.Scan(&field); err != nil {
+					log.Printf("Error scanning PostgreSQL row: %v", err)
 					continue
 				}
+				log.Printf("Found PostgreSQL field: %s", field)
 				fields = append(fields, field)
+				fieldCount++
+			}
+		}
+
+		// If no fields found and it's PostgreSQL, try lowercase table name
+		if fieldCount == 0 && (connection.Type == "postgresql" || connection.Type == "postgres") {
+			log.Printf("No fields found with original name, trying lowercase for PostgreSQL")
+			rows.Close() // Close previous rows
+			
+			queryLower := fmt.Sprintf(`
+				SELECT column_name 
+				FROM information_schema.columns 
+				WHERE table_name = '%s' AND table_schema = 'public'
+			`, strings.ToLower(collectionName))
+			
+			log.Printf("Executing lowercase query: %s", queryLower)
+			
+			rows, err = sqlClient.Query(queryLower)
+			if err != nil {
+				log.Printf("Lowercase query error: %v", err)
+			} else {
+				defer rows.Close()
+				for rows.Next() {
+					var field string
+					if err := rows.Scan(&field); err != nil {
+						log.Printf("Error scanning PostgreSQL lowercase row: %v", err)
+						continue
+					}
+					log.Printf("Found PostgreSQL field (lowercase): %s", field)
+					fields = append(fields, field)
+				}
 			}
 		}
 	}
+
+	// Log the fields before returning
+	log.Printf("GetCollectionSchema for table '%s': found fields: %v", collectionName, fields)
 
 	return c.JSON(fiber.Map{
 		"fields": fields,
@@ -404,7 +460,7 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 			documents = append(documents, doc)
 		}
 
-	case "mysql", "postgresql":
+	case "mysql", "postgresql", "postgres":
 		// For SQL databases
 		sqlClient, err := h.dbService.ConnectSQL(connection)
 		if err != nil {
@@ -417,6 +473,8 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 		// Build query
 		baseQuery := fmt.Sprintf("SELECT * FROM %s", collectionName)
 		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", collectionName)
+		
+		log.Printf("GetDocuments - Initial query for collection '%s': %s", collectionName, baseQuery)
 		
 		var whereClause string
 		var args []interface{}
@@ -434,7 +492,8 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 				for rows.Next() {
 					var colName string
 					if connection.Type == "mysql" {
-						var fieldType, null, key, defaultVal, extra string
+						var fieldType, null, key, extra string
+						var defaultVal sql.NullString
 						rows.Scan(&colName, &fieldType, &null, &key, &defaultVal, &extra)
 					} else {
 						rows.Scan(&colName)
@@ -447,7 +506,11 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 			if len(searchColumns) > 0 {
 				var searchConditions []string
 				for _, col := range searchColumns {
-					searchConditions = append(searchConditions, fmt.Sprintf("CAST(%s AS TEXT) ILIKE ?", col))
+					if connection.Type == "mysql" {
+						searchConditions = append(searchConditions, fmt.Sprintf("CAST(%s AS CHAR) LIKE ?", col))
+					} else {
+						searchConditions = append(searchConditions, fmt.Sprintf("CAST(%s AS TEXT) ILIKE ?", col))
+					}
 					args = append(args, "%"+search+"%")
 				}
 				whereClause = " WHERE " + strings.Join(searchConditions, " OR ")
@@ -462,10 +525,13 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 			countArgs = make([]interface{}, len(args))
 			copy(countArgs, args)
 		}
+		
+		log.Printf("GetDocuments - Count query: %s, args: %v", countQuery, countArgs)
 		err = sqlClient.QueryRow(countQuery, countArgs...).Scan(&total)
 		if err != nil {
 			log.Printf("Error counting rows: %v", err)
 		}
+		log.Printf("GetDocuments - Total count: %d", total)
 
 		// Add sorting and pagination
 		if sortField != "" && sortOrder != "" {
@@ -475,8 +541,10 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 		offset := (page - 1) * limit
 		baseQuery += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
+		log.Printf("GetDocuments - Final query: %s, args: %v", baseQuery, args)
 		rows, err := sqlClient.Query(baseQuery, args...)
 		if err != nil {
+			log.Printf("GetDocuments - Query error: %v", err)
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to fetch rows: " + err.Error(),
 			})
@@ -513,8 +581,11 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 			}
 			documents = append(documents, doc)
 		}
+		
+		log.Printf("GetDocuments - Found %d documents for collection '%s'", len(documents), collectionName)
 	}
 
+	log.Printf("GetDocuments - Returning: documents=%d, total=%d, page=%d, limit=%d", len(documents), total, page, limit)
 	return c.JSON(fiber.Map{
 		"documents": documents,
 		"total":     total,
@@ -618,9 +689,18 @@ func (h *DatabaseManagementHandler) CreateDocument(c *fiber.Ctx) error {
 		var placeholders []string
 		var values []interface{}
 		
+		i := 1
 		for key, value := range req.Data {
 			columns = append(columns, key)
-			placeholders = append(placeholders, "?")
+			
+			// Use different placeholder format based on database type
+			if connection.Type == "postgresql" || connection.Type == "postgres" {
+				placeholders = append(placeholders, fmt.Sprintf("$%d", i))
+				i++
+			} else {
+				placeholders = append(placeholders, "?")
+			}
+			
 			values = append(values, value)
 		}
 
@@ -738,7 +818,7 @@ func (h *DatabaseManagementHandler) UpdateDocument(c *fiber.Ctx) error {
 			"modified": result.ModifiedCount,
 		})
 
-	case "mysql", "postgresql":
+	case "mysql", "postgresql", "postgres":
 		// For SQL databases
 		sqlClient, err := h.dbService.ConnectSQL(connection)
 		if err != nil {
@@ -752,17 +832,31 @@ func (h *DatabaseManagementHandler) UpdateDocument(c *fiber.Ctx) error {
 		var setPairs []string
 		var values []interface{}
 		
+		i := 1
 		for key, value := range req.Data {
-			setPairs = append(setPairs, key+" = ?")
+			if connection.Type == "postgresql" || connection.Type == "postgres" {
+				setPairs = append(setPairs, fmt.Sprintf("%s = $%d", key, i))
+				i++
+			} else {
+				setPairs = append(setPairs, key+" = ?")
+			}
 			values = append(values, value)
 		}
 		
 		// Add ID to values
 		values = append(values, documentID)
 
-		query := fmt.Sprintf("UPDATE %s SET %s WHERE id = ?",
-			collectionName,
-			strings.Join(setPairs, ", "))
+		var query string
+		if connection.Type == "postgresql" || connection.Type == "postgres" {
+			query = fmt.Sprintf("UPDATE %s SET %s WHERE id = $%d",
+				collectionName,
+				strings.Join(setPairs, ", "),
+				i)
+		} else {
+			query = fmt.Sprintf("UPDATE %s SET %s WHERE id = ?",
+				collectionName,
+				strings.Join(setPairs, ", "))
+		}
 
 		result, err := sqlClient.Exec(query, values...)
 		if err != nil {
@@ -868,7 +962,7 @@ func (h *DatabaseManagementHandler) DeleteDocument(c *fiber.Ctx) error {
 			"deleted": result.DeletedCount,
 		})
 
-	case "mysql", "postgresql":
+	case "mysql", "postgresql", "postgres":
 		// For SQL databases
 		sqlClient, err := h.dbService.ConnectSQL(connection)
 		if err != nil {
@@ -878,7 +972,13 @@ func (h *DatabaseManagementHandler) DeleteDocument(c *fiber.Ctx) error {
 		}
 		defer sqlClient.Close()
 
-		query := fmt.Sprintf("DELETE FROM %s WHERE id = ?", collectionName)
+		var query string
+		if connection.Type == "postgresql" || connection.Type == "postgres" {
+			query = fmt.Sprintf("DELETE FROM %s WHERE id = $1", collectionName)
+		} else {
+			query = fmt.Sprintf("DELETE FROM %s WHERE id = ?", collectionName)
+		}
+		
 		result, err := sqlClient.Exec(query, documentID)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
