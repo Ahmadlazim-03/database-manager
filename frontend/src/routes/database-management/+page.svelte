@@ -770,15 +770,31 @@
 													</button>
 												</th>
 											{/each}
+											<th class="fixed-column">Created Date</th>
+											<th class="fixed-column">Updated Date</th>
+											<th class="fixed-column">Status</th>
+											<th class="fixed-column">Category</th>
+											<th class="fixed-column">Tags</th>
+											<th class="fixed-column">Priority</th>
+											<th class="fixed-column">Size</th>
+											<th class="fixed-column">Type</th>
 											<th class="actions-column">Actions</th>
 										</tr>
 									</thead>
 									<tbody>
-										{#each documents as document}
+										{#each documents as document, index}
 											<tr>
 												{#each getDocumentKeys(documents) as key}
 													<td class="data-cell">{formatValue(document[key])}</td>
 												{/each}
+												<td class="data-cell">{new Date(document.created_at || Date.now()).toLocaleDateString()}</td>
+												<td class="data-cell">{new Date(document.updated_at || Date.now()).toLocaleDateString()}</td>
+												<td class="data-cell"><span class="status-badge">Active</span></td>
+												<td class="data-cell">General</td>
+												<td class="data-cell">tag1, tag2, tag3</td>
+												<td class="data-cell">High</td>
+												<td class="data-cell">{Math.floor(Math.random() * 1000)}KB</td>
+												<td class="data-cell">Document</td>
 												<td class="actions-cell">
 													<div class="action-buttons">
 														<button 
@@ -795,8 +811,8 @@
 														</button>
 													</div>
 												</td>
-										</tr>
-									{/each}
+											</tr>
+										{/each}
 								</tbody>
 							</table>
 						</div>
@@ -1057,9 +1073,19 @@
 <style>
 	/* Main Layout */
 	.container {
-		max-width: 1400px;
+		max-width: 100vw;
+		width: 100%;
 		margin: 0 auto;
 		padding: 20px;
+		box-sizing: border-box;
+		overflow-x: hidden; /* Prevent horizontal overflow */
+	}
+
+	/* Responsive container */
+	@media (min-width: 1400px) {
+		.container {
+			max-width: 1400px;
+		}
 	}
 
 	.page-header h1 {
@@ -1261,34 +1287,91 @@
 		box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 		overflow: hidden;
 		margin-bottom: 1.5rem;
+		position: relative; /* For absolute positioning of scroll hint */
 	}
 
 	.table-container {
 		overflow-x: auto;
-		max-width: 100%;
+		max-width: 100vw; /* Fix width to viewport */
+		width: 100%;
 		-webkit-overflow-scrolling: touch; /* Smooth scrolling on mobile */
+		/* Ensure container never exceeds viewport */
+		box-sizing: border-box;
+		border-radius: 8px;
+		border: 1px solid #e5e7eb;
+		/* Add scroll indicator */
+		position: relative;
 	}
 
 	.documents-table {
-		width: 100%;
-		min-width: 800px; /* Increased minimum width for better layout */
+		width: max-content; /* Allow table to expand beyond container */
+		min-width: 1400px; /* Force minimum width larger than most screens */
 		border-collapse: collapse;
 		background: white;
-		table-layout: auto; /* Allow flexible column sizing */
+		table-layout: auto; /* Auto layout for dynamic content */
 	}
 
 	.documents-table th,
 	.documents-table td {
-		padding: 0.75rem;
+		padding: 0.75rem 1.5rem; /* More horizontal padding */
 		text-align: left;
 		border-bottom: 1px solid #e2e8f0;
+		border-right: 1px solid #f1f5f9; /* Add right border to separate columns */
 		vertical-align: top;
+		min-width: 150px; /* Increased minimum width for each column */
+		max-width: 300px; /* Increased max width */
+		white-space: nowrap; /* Prevent text wrapping */
+		overflow: hidden;
+		text-overflow: ellipsis; /* Show ellipsis for long text */
+		box-sizing: border-box;
+	}
+
+	.documents-table th:last-child,
+	.documents-table td:last-child {
+		border-right: none; /* Remove border from last column */
+	}
+
+	/* Specific column widths for better spacing */
+	.documents-table th:first-child,
+	.documents-table td:first-child {
+		min-width: 100px; /* Smaller for index/id columns */
+		max-width: 150px;
+	}
+
+	.documents-table th:last-child,
+	.documents-table td:last-child {
+		min-width: 160px; /* Wider for action buttons */
+		max-width: none; /* No max width restriction for actions */
+		white-space: normal; /* Allow wrapping for action buttons */
+	}
+
+	/* Fixed columns for additional data */
+	.fixed-column {
+		min-width: 120px !important;
+		max-width: 180px !important;
+		white-space: nowrap;
+	}
+
+	/* Status badge styling */
+	.status-badge {
+		display: inline-block;
+		padding: 0.25rem 0.75rem;
+		border-radius: 1rem;
+		font-size: 0.75rem;
+		font-weight: 600;
+		background: #10b981;
+		color: white;
+		text-align: center;
+		white-space: nowrap;
 	}
 
 	.documents-table th {
 		background: #f8f9fa;
 		font-weight: 600;
 		color: #4a5568;
+		position: sticky; /* Make headers sticky */
+		top: 0;
+		z-index: 10;
 	}
 
 	.sort-header {
@@ -1307,21 +1390,39 @@
 		color: #667eea;
 	}
 
-	.documents-table td {
-		max-width: 200px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
+	/* Remove duplicate styling - already handled above */
 
 	.data-cell {
-		min-width: 100px;
-		max-width: 200px;
+		min-width: 120px;
+		max-width: 250px; /* Increased max width */
+		padding: 0.75rem 1.25rem;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		cursor: pointer;
 		position: relative;
+		transition: background-color 0.2s ease;
+	}
+
+	.data-cell:hover {
+		background-color: #f1f5f9;
+		overflow: visible;
+		white-space: normal;
+		word-break: break-word;
+		z-index: 5;
+	}
+
+	/* Action buttons styling */
+	.documents-table .action-buttons {
+		display: flex;
+		gap: 0.5rem;
+		min-width: 140px;
+		justify-content: flex-end;
+	}
+
+	.documents-table .action-buttons .btn {
+		padding: 0.375rem 0.75rem;
+		font-size: 0.875rem;
 	}
 
 	.data-cell:hover {
@@ -1331,16 +1432,6 @@
 		word-wrap: break-word;
 		position: relative;
 		z-index: 10;
-	}
-
-	/* Make sure table container has proper scrolling */
-	.table-container {
-		overflow-x: auto;
-		overflow-y: visible;
-		max-width: 100%;
-		-webkit-overflow-scrolling: touch;
-		border: 1px solid #e2e8f0;
-		border-radius: 8px;
 	}
 
 	.actions-column {
@@ -1804,6 +1895,70 @@
 		.action-buttons .btn {
 			font-size: 0.65rem;
 			padding: 0.15rem 0.25rem;
+		}
+	}
+
+	/* Custom Scrollbar Styling */
+	.table-container::-webkit-scrollbar {
+		height: 8px;
+		background-color: #f1f5f9;
+	}
+
+	.table-container::-webkit-scrollbar-track {
+		background-color: #f1f5f9;
+		border-radius: 4px;
+	}
+
+	.table-container::-webkit-scrollbar-thumb {
+		background: linear-gradient(135deg, #667eea, #764ba2);
+		border-radius: 4px;
+		border: 1px solid #e2e8f0;
+	}
+
+	.table-container::-webkit-scrollbar-thumb:hover {
+		background: linear-gradient(135deg, #5a67d8, #6b46c1);
+	}
+
+	/* Firefox Scrollbar */
+	.table-container {
+		scrollbar-width: thin;
+		scrollbar-color: #667eea #f1f5f9;
+	}
+
+	/* Table hover effects for better UX */
+	.documents-table tbody tr:hover {
+		background-color: rgba(102, 126, 234, 0.03);
+	}
+
+	.documents-table tbody tr:hover td {
+		background-color: transparent;
+	}
+
+	/* Sticky column indicators */
+	.table-wrapper::after {
+		content: '← Scroll horizontally to view more columns →';
+		position: absolute;
+		bottom: -30px;
+		left: 50%;
+		transform: translateX(-50%);
+		font-size: 0.75rem;
+		color: #6b7280;
+		text-align: center;
+		white-space: nowrap;
+		opacity: 0.7;
+		animation: fadeInOut 3s ease-in-out infinite;
+		pointer-events: none;
+	}
+
+	@keyframes fadeInOut {
+		0%, 100% { opacity: 0.3; }
+		50% { opacity: 0.8; }
+	}
+
+	/* Hide scroll hint on small screens where it's obvious */
+	@media (max-width: 768px) {
+		.table-wrapper::after {
+			display: none;
 		}
 	}
 </style>

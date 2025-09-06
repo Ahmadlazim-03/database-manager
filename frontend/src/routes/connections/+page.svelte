@@ -20,7 +20,14 @@
 		port: 3306,
 		database: '',
 		username: '',
-		password: ''
+		password: '',
+		// New authentication fields
+		auth_method: 'password',
+		ssl_mode: 'disable',
+		ssl_cert: '',
+		ssl_key: '',
+		ssl_root_cert: '',
+		connection_string: ''
 	};
 
 	// Drag functionality variables
@@ -88,7 +95,14 @@
 			port: 3306,
 			database: '',
 			username: '',
-			password: ''
+			password: '',
+			// New authentication fields
+			auth_method: 'password',
+			ssl_mode: 'disable',
+			ssl_cert: '',
+			ssl_key: '',
+			ssl_root_cert: '',
+			connection_string: ''
 		};
 	}
 
@@ -499,6 +513,84 @@
 					</div>
 				</div>
 
+				<!-- Authentication Section -->
+				<div class="form-section">
+					<h4 class="section-title">Authentication & Security</h4>
+					
+					<div class="form-group">
+						<label for="auth_method" class="form-label">Authentication Method</label>
+						<select id="auth_method" bind:value={newConnection.auth_method} class="form-input">
+							<option value="password">Username/Password</option>
+							<option value="ssl">SSL Certificate</option>
+							<option value="oauth">OAuth</option>
+							<option value="connection_string">Custom Connection String</option>
+						</select>
+					</div>
+
+					{#if newConnection.auth_method === 'ssl' || (newConnection.type === 'postgresql' || newConnection.type === 'postgres')}
+						<div class="form-group">
+							<label for="ssl_mode" class="form-label">SSL Mode</label>
+							<select id="ssl_mode" bind:value={newConnection.ssl_mode} class="form-input">
+								<option value="disable">Disable</option>
+								<option value="require">Require</option>
+								<option value="verify-ca">Verify CA</option>
+								<option value="verify-full">Verify Full</option>
+							</select>
+						</div>
+
+						{#if newConnection.ssl_mode !== 'disable'}
+							<div class="form-group">
+								<label for="ssl_cert" class="form-label">SSL Certificate</label>
+								<textarea
+									id="ssl_cert"
+									bind:value={newConnection.ssl_cert}
+									class="form-input"
+									placeholder="-----BEGIN CERTIFICATE-----"
+									rows="3"
+								></textarea>
+							</div>
+
+							<div class="form-group">
+								<label for="ssl_key" class="form-label">SSL Key</label>
+								<textarea
+									id="ssl_key"
+									bind:value={newConnection.ssl_key}
+									class="form-input"
+									placeholder="-----BEGIN PRIVATE KEY-----"
+									rows="3"
+								></textarea>
+							</div>
+
+							<div class="form-group">
+								<label for="ssl_root_cert" class="form-label">SSL Root Certificate</label>
+								<textarea
+									id="ssl_root_cert"
+									bind:value={newConnection.ssl_root_cert}
+									class="form-input"
+									placeholder="-----BEGIN CERTIFICATE-----"
+									rows="3"
+								></textarea>
+							</div>
+						{/if}
+					{/if}
+
+					{#if newConnection.auth_method === 'connection_string'}
+						<div class="form-group">
+							<label for="connection_string" class="form-label">Connection String</label>
+							<textarea
+								id="connection_string"
+								bind:value={newConnection.connection_string}
+								class="form-input"
+								placeholder="mongodb://username:password@host:port/database?options"
+								rows="3"
+							></textarea>
+							<small class="form-help">
+								Use this for custom connection strings with special authentication or cloud services
+							</small>
+						</div>
+					{/if}
+				</div>
+
 				<div class="form-actions">
 					<button
 						type="button"
@@ -875,5 +967,107 @@
 	.empty-state p {
 		margin-bottom: 24px;
 		font-size: 1.1rem;
+	}
+
+	/* Form Styling */
+	.form-group {
+		margin-bottom: 1.5rem;
+	}
+
+	.form-section {
+		margin-bottom: 2rem;
+		padding: 1.5rem;
+		border: 1px solid #e5e7eb;
+		border-radius: 8px;
+		background-color: #f9fafb;
+	}
+
+	.section-title {
+		font-size: 1.2rem;
+		font-weight: 600;
+		color: #374151;
+		margin-bottom: 1rem;
+		border-bottom: 2px solid #3b82f6;
+		padding-bottom: 0.5rem;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.section-title::before {
+		content: '🔐';
+		font-size: 1rem;
+	}
+
+	.form-label {
+		display: block;
+		margin-bottom: 0.5rem;
+		font-weight: 500;
+		color: #374151;
+	}
+
+	.form-input {
+		width: 100%;
+		padding: 12px 16px;
+		border: 1px solid #d1d5db;
+		border-radius: 6px;
+		font-size: 1rem;
+		background-color: white;
+		transition: all 0.2s ease;
+		box-sizing: border-box;
+	}
+
+	.form-input:focus {
+		outline: none;
+		border-color: #3b82f6;
+		box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+	}
+
+	.form-input textarea {
+		resize: vertical;
+		min-height: 80px;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.9rem;
+	}
+
+	.form-help {
+		display: block;
+		margin-top: 0.25rem;
+		font-size: 0.875rem;
+		color: #6b7280;
+		font-style: italic;
+	}
+
+	.form-actions {
+		display: flex;
+		gap: 12px;
+		justify-content: flex-end;
+		margin-top: 2rem;
+		padding-top: 1.5rem;
+		border-top: 1px solid #e5e7eb;
+	}
+
+	/* Responsive Form */
+	@media (max-width: 768px) {
+		.form-section {
+			padding: 1rem;
+			margin-bottom: 1.5rem;
+		}
+
+		.section-title {
+			font-size: 1.1rem;
+		}
+
+		.form-input {
+			padding: 10px 12px;
+		}
+
+		.form-actions {
+			flex-direction: column;
+		}
+
+		.form-actions button {
+			width: 100%;
+		}
 	}
 </style>

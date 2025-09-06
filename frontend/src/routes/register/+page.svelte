@@ -10,9 +10,11 @@
 	let email = '';
 	let password = '';
 	let confirmPassword = '';
-	let isLogin = true;
+	let firstName = '';
+	let lastName = '';
 	let loading = false;
 	let error = '';
+	let success = '';
 
 	onMount(() => {
 		if ($isAuthenticated) {
@@ -36,40 +38,65 @@
 
 	async function handleSubmit() {
 		error = '';
+		success = '';
 		loading = true;
 
 		try {
-			if (!isLogin && password !== confirmPassword) {
+			// Validation
+			if (!firstName.trim()) {
+				error = 'First name is required';
+				loading = false;
+				return;
+			}
+
+			if (!lastName.trim()) {
+				error = 'Last name is required';
+				loading = false;
+				return;
+			}
+
+			if (!email.trim()) {
+				error = 'Email is required';
+				loading = false;
+				return;
+			}
+
+			if (password.length < 6) {
+				error = 'Password must be at least 6 characters';
+				loading = false;
+				return;
+			}
+
+			if (password !== confirmPassword) {
 				error = 'Passwords do not match';
 				loading = false;
 				return;
 			}
 
-			let response;
-			if (isLogin) {
-				response = await apiClient.login(email, password);
-			} else {
-				response = await apiClient.register(email, password);
-			}
+			const response = await apiClient.register({
+				first_name: firstName,
+				last_name: lastName,
+				email: email,
+				password: password
+			});
 
-			setUser(response.user, response.token);
-			goto('/dashboard');
+			success = 'Account created successfully! Redirecting to login...';
+			
+			// Redirect to login after success
+			setTimeout(() => {
+				goto('/login');
+			}, 2000);
+
 		} catch (err) {
-			error = err.response?.data?.error || 'An error occurred';
+			error = err.response?.data?.error || 'Failed to create account';
 		} finally {
 			loading = false;
 		}
 	}
-
-	function toggleMode() {
-		isLogin = !isLogin;
-		error = '';
-		confirmPassword = '';
-	}
 </script>
 
 <svelte:head>
-	<title>{isLogin ? 'Login' : 'Register'} - Database Manager Pro</title>
+	<title>Register - Database Manager Pro</title>
 </svelte:head>
 
 <div class="auth-container">
@@ -85,19 +112,46 @@
 				<i data-lucide="database" class="auth-logo-icon"></i>
 				<span class="auth-logo-text">Database Manager Pro</span>
 			</div>
-			<h1 class="auth-title">
-				{isLogin ? 'Welcome back!' : 'Get started today'}
-			</h1>
-			<p class="auth-subtitle">
-				{isLogin ? 'Sign in to your account to continue' : 'Create a new account to get started'}
-			</p>
+			<h1 class="auth-title">Create Account</h1>
+			<p class="auth-subtitle">Join thousands of developers managing their databases efficiently</p>
 		</div>
 
 		{#if error}
-			<Alert type="error" title="Authentication Error" message={error} />
+			<Alert type="error" title="Registration Error" message={error} />
+		{/if}
+
+		{#if success}
+			<Alert type="success" title="Success!" message={success} />
 		{/if}
 
 		<form on:submit|preventDefault={handleSubmit} data-aos="fade-up" data-aos-delay="600">
+			<div class="form-row">
+				<div class="form-col">
+					<Input
+						label="First Name"
+						type="text"
+						icon="user"
+						bind:value={firstName}
+						placeholder="Enter your first name"
+						required
+						disabled={loading}
+						floating={true}
+					/>
+				</div>
+				<div class="form-col">
+					<Input
+						label="Last Name"
+						type="text"
+						icon="user"
+						bind:value={lastName}
+						placeholder="Enter your last name"
+						required
+						disabled={loading}
+						floating={true}
+					/>
+				</div>
+			</div>
+
 			<Input
 				label="Email Address"
 				type="email"
@@ -114,24 +168,33 @@
 				type="password"
 				icon="lock"
 				bind:value={password}
-				placeholder="Enter your password"
+				placeholder="Create a password (min 6 characters)"
 				required
 				disabled={loading}
 				floating={true}
 			/>
 
-			{#if !isLogin}
-				<Input
-					label="Confirm Password"
-					type="password"
-					icon="lock"
-					bind:value={confirmPassword}
-					placeholder="Confirm your password"
-					required
-					disabled={loading}
-					floating={true}
-				/>
-			{/if}
+			<Input
+				label="Confirm Password"
+				type="password"
+				icon="lock"
+				bind:value={confirmPassword}
+				placeholder="Confirm your password"
+				required
+				disabled={loading}
+				floating={true}
+			/>
+
+			<div class="terms-section">
+				<label class="terms-checkbox">
+					<input type="checkbox" required />
+					<span class="checkmark"></span>
+					<span class="terms-text">
+						I agree to the <a href="/terms" target="_blank">Terms of Service</a> 
+						and <a href="/privacy" target="_blank">Privacy Policy</a>
+					</span>
+				</label>
+			</div>
 
 			<div class="auth-actions" data-aos="fade-up" data-aos-delay="800">
 				<Button
@@ -140,38 +203,37 @@
 					size="lg"
 					{loading}
 					disabled={loading}
-					icon={isLogin ? "log-in" : "user-plus"}
+					icon="user-plus"
 					style="width: 100%; justify-content: center;"
 				>
-					{isLogin ? 'Sign In' : 'Create Account'}
+					Create Account
 				</Button>
 			</div>
 		</form>
 
 		<div class="auth-footer" data-aos="fade" data-aos-delay="900">
-			<p class="footer-text">
-				{isLogin ? "Don't have an account?" : 'Already have an account?'}
-			</p>
+			<p class="footer-text">Already have an account?</p>
 			<Button
 				type="button"
 				variant="ghost"
 				size="sm"
-				on:click={isLogin ? () => goto('/register') : toggleMode}
+				on:click={() => goto('/login')}
 				disabled={loading}
 			>
-				{isLogin ? 'Create Account' : 'Sign In'}
+				Sign In
 			</Button>
 		</div>
 	</div>
 </div>
 
 <style>
+	/* Auth Page Modern Styling */
 	.auth-container {
 		min-height: 100vh;
+		background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 		padding: 20px;
 		position: relative;
 		overflow: hidden;
@@ -242,9 +304,9 @@
 		border: 1px solid rgba(255, 255, 255, 0.2);
 		border-radius: 16px;
 		padding: 48px;
-		box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
 		width: 100%;
-		max-width: 480px;
+		max-width: 500px;
+		box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
 		position: relative;
 		z-index: 1;
 	}
@@ -283,9 +345,54 @@
 	}
 
 	.auth-subtitle {
-		color: #666;
 		font-size: 1rem;
+		color: #666;
 		line-height: 1.5;
+	}
+
+	.form-row {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 16px;
+		margin-bottom: 20px;
+	}
+
+	.form-col {
+		min-width: 0;
+	}
+
+	.terms-section {
+		margin: 24px 0;
+	}
+
+	.terms-checkbox {
+		display: flex;
+		align-items: flex-start;
+		gap: 12px;
+		cursor: pointer;
+		line-height: 1.4;
+	}
+
+	.terms-checkbox input[type="checkbox"] {
+		width: 18px;
+		height: 18px;
+		margin: 0;
+		cursor: pointer;
+	}
+
+	.terms-text {
+		font-size: 0.9rem;
+		color: #666;
+	}
+
+	.terms-text a {
+		color: #667eea;
+		text-decoration: none;
+		font-weight: 500;
+	}
+
+	.terms-text a:hover {
+		text-decoration: underline;
 	}
 
 	.auth-actions {
@@ -353,6 +460,15 @@
 
 		.auth-logo-text {
 			font-size: 1.25rem;
+		}
+
+		.form-row {
+			grid-template-columns: 1fr;
+			gap: 0;
+		}
+
+		.form-col {
+			margin-bottom: 20px;
 		}
 	}
 

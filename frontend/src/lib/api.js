@@ -35,8 +35,8 @@ class ApiClient {
     }
 
     // Auth methods
-    async register(email, password) {
-        const response = await this.client.post('/auth/register', { email, password });
+    async register(userData) {
+        const response = await this.client.post('/auth/register', userData);
         return response.data;
     }
 

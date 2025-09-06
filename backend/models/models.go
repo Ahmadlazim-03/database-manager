@@ -26,6 +26,13 @@ type DatabaseConnection struct {
 	Database     string         `json:"database" gorm:"not null"`
 	Username     string         `json:"username"`
 	Password     string         `json:"-"`
+	// New authentication fields
+	AuthMethod   string         `json:"auth_method" gorm:"default:'password'"` // password, ssl, oauth, key
+	SSLMode      string         `json:"ssl_mode" gorm:"default:'disable'"`     // disable, require, verify-ca, verify-full
+	SSLCert      string         `json:"-"`                                     // SSL certificate
+	SSLKey       string         `json:"-"`                                     // SSL key
+	SSLRootCert  string         `json:"-"`                                     // SSL root certificate
+	ConnectionString string     `json:"-"`                                     // Custom connection string
 	Status       string         `json:"status" gorm:"default:'active'"` // active, inactive
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
