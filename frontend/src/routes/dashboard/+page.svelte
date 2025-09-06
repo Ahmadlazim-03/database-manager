@@ -78,6 +78,22 @@
 		goto(`/database-management?db=${shared.database.id}&shared=true&permission=${shared.permission_level}`);
 	}
 
+	async function leaveSharedDatabase(databaseId) {
+		if (!confirm('Are you sure you want to leave this shared database? You will lose access to it.')) {
+			return;
+		}
+
+		try {
+			await apiClient.leaveSharedDatabase(databaseId);
+			// Reload dashboard data to update the shared databases list
+			await loadDashboardData();
+			alert('Successfully left the shared database');
+		} catch (error) {
+			console.error('Error leaving shared database:', error);
+			alert('Failed to leave shared database: ' + (error.response?.data?.error || error.message));
+		}
+	}
+
 	async function acceptInvitation(token) {
 		try {
 			await apiClient.acceptInvitation(token);
@@ -269,6 +285,13 @@
 										on:click={() => manageSharedDatabase(shared)}
 									>
 										Manage
+									</button>
+									<button 
+										class="btn btn-sm btn-danger" 
+										on:click={() => leaveSharedDatabase(shared.database.id)}
+										title="Leave this shared database"
+									>
+										Leave
 									</button>
 								</div>
 							</div>
@@ -667,5 +690,23 @@
 	.btn-sm {
 		padding: 0.5rem 1rem;
 		font-size: 0.875rem;
+	}
+
+	.btn-danger {
+		background: #ef4444;
+		color: white;
+		border: 1px solid #ef4444;
+	}
+
+	.btn-danger:hover {
+		background: #dc2626;
+		border-color: #dc2626;
+	}
+
+	.shared-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
 	}
 </style>

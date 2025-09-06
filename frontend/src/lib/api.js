@@ -174,6 +174,13 @@ class ApiClient {
         const response = await this.client.delete(`/sharing/invitations/${invitationId}`);
         return response.data;
     }
+
+    async leaveSharedDatabase(databaseId) {
+        const response = await this.client.delete('/sharing/leave', {
+            data: { database_id: databaseId }
+        });
+        return response.data;
+    }
 }
 
 export const apiClient = new ApiClient();

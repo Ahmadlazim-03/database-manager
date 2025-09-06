@@ -102,6 +102,7 @@ func main() {
 	sharing.Get("/database-access/:databaseId", sharingHandler.GetDatabaseAccess)
 	sharing.Delete("/access", sharingHandler.RevokeAccess)
 	sharing.Delete("/invitations/:invitationId", sharingHandler.RevokeInvitation)
+	sharing.Delete("/leave", sharingHandler.LeaveSharedDatabase)
 
 	// Dynamic API routes (public with API key)
 	dynamicAPI := api.Group("/:collection", 

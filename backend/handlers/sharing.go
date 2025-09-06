@@ -3,6 +3,7 @@ package handlers
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"log"
 	"time"
 
 	"db-manager-backend/config"
@@ -401,5 +402,77 @@ func (h *SharingHandler) RevokeInvitation(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"message": "Invitation revoked successfully",
+	})
+}
+
+// LeaveSharedDatabase allows user to leave/remove shared database from their list
+func (h *SharingHandler) LeaveSharedDatabase(c *fiber.Ctx) error {
+	type LeaveRequest struct {
+		DatabaseID string `json:"database_id" validate:"required"`
+	}
+
+	var req LeaveRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid request body",
+		})
+	}
+
+	userIDStr := c.Locals("user_id").(string)
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid user ID",
+		})
+	}
+
+	databaseID, err := uuid.Parse(req.DatabaseID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid database ID",
+		})
+	}
+
+	// Check if user has access to this shared database
+	var access models.DatabaseAccess
+	if err := config.DB.Where("database_id = ? AND user_id = ?", 
+		databaseID, userID).First(&access).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "Shared database access not found",
+		})
+	}
+
+	// Start transaction to delete both access and invitation records
+	tx := config.DB.Begin()
+
+	// Delete the access record
+	if err := tx.Delete(&access).Error; err != nil {
+		tx.Rollback()
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to leave shared database",
+		})
+	}
+
+	// Also delete the accepted invitation record if exists
+	// This prevents the invitation from showing up in the share modal history
+	// First get user email to match with invitation
+	var user models.User
+	if err := tx.Where("id = ?", userID).First(&user).Error; err == nil {
+		if err := tx.Where("database_id = ? AND invited_email = ?", 
+			databaseID, user.Email).Delete(&models.DatabaseInvitation{}).Error; err != nil {
+			// Log error but don't fail the operation if invitation deletion fails
+			log.Printf("Warning: Failed to delete invitation record: %v", err)
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit().Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to complete leave operation",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "Successfully left shared database",
 	})
 }

@@ -30,6 +30,34 @@ func NewDatabaseManagementHandler() *DatabaseManagementHandler {
 	}
 }
 
+// Helper function to check database access and get connection
+func (h *DatabaseManagementHandler) getDatabaseConnection(databaseID, userID uuid.UUID) (*models.DatabaseConnection, error) {
+	var connection models.DatabaseConnection
+	
+	// First, try to find as owner
+	ownerErr := config.DB.Where("id = ? AND user_id = ?", databaseID, userID).First(&connection).Error
+	if ownerErr == nil {
+		log.Printf("User has owner access to database: %s", databaseID)
+		return &connection, nil
+	}
+	
+	// If not owner, check if user has shared access
+	var access models.DatabaseAccess
+	sharedErr := config.DB.Where("database_id = ? AND user_id = ?", databaseID, userID).First(&access).Error
+	if sharedErr == nil {
+		// User has shared access, get the original connection info
+		if err := config.DB.Where("id = ?", databaseID).First(&connection).Error; err != nil {
+			log.Printf("Shared database connection not found: %v", err)
+			return nil, fmt.Errorf("shared database connection not found")
+		}
+		log.Printf("User has shared access to database: %s", databaseID)
+		return &connection, nil
+	}
+	
+	log.Printf("User has no access to database: %s", databaseID)
+	return nil, fmt.Errorf("database not found or access denied")
+}
+
 // Helper function to extract user ID from context
 func (h *DatabaseManagementHandler) getUserID(c *fiber.Ctx) (uuid.UUID, error) {
 	userIDInterface := c.Locals("user_id")
@@ -137,12 +165,11 @@ func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get database connection info using GORM
-	var connection models.DatabaseConnection
-	if err := config.DB.Where("id = ? AND user_id = ?", databaseID, userID).First(&connection).Error; err != nil {
-		log.Printf("Database connection not found: %v", err)
+	// Get database connection using helper function
+	connection, err := h.getDatabaseConnection(databaseID, userID)
+	if err != nil {
 		return c.Status(404).JSON(fiber.Map{
-			"error": "Database connection not found",
+			"error": err.Error(),
 		})
 	}
 
@@ -154,7 +181,7 @@ func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 	case "mongodb":
 		log.Printf("Processing MongoDB connection")
 		// Connect to MongoDB
-		client, err := h.dbService.ConnectMongoDB(connection)
+		client, err := h.dbService.ConnectMongoDB(*connection)
 		if err != nil {
 			log.Printf("MongoDB connection failed: %v", err)
 			return c.Status(500).JSON(fiber.Map{
@@ -176,7 +203,7 @@ func (h *DatabaseManagementHandler) GetCollections(c *fiber.Ctx) error {
 	case "mysql", "postgresql", "postgres":
 		log.Printf("Processing SQL connection type: %s", connection.Type)
 		// For SQL databases, get table names
-		sqlClient, err := h.dbService.ConnectSQL(connection)
+		sqlClient, err := h.dbService.ConnectSQL(*connection)
 		if err != nil {
 			log.Printf("SQL connection failed: %v", err)
 			return c.Status(500).JSON(fiber.Map{
@@ -247,11 +274,11 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get database connection info using GORM
-	var connection models.DatabaseConnection
-	if err := config.DB.Where("id = ? AND user_id = ?", databaseID, userID).First(&connection).Error; err != nil {
+	// Get database connection using helper function
+	connection, err := h.getDatabaseConnection(databaseID, userID)
+	if err != nil {
 		return c.Status(404).JSON(fiber.Map{
-			"error": "Database connection not found",
+			"error": err.Error(),
 		})
 	}
 
@@ -265,7 +292,7 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 	switch connection.Type {
 	case "mongodb":
 		// Connect to MongoDB and sample documents to get field names
-		client, err := h.dbService.ConnectMongoDB(connection)
+		client, err := h.dbService.ConnectMongoDB(*connection)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to MongoDB: " + err.Error(),
@@ -335,7 +362,7 @@ func (h *DatabaseManagementHandler) GetCollectionSchema(c *fiber.Ctx) error {
 
 	case "mysql", "postgresql", "postgres":
 		// Get column names and types for SQL tables
-		sqlClient, err := h.dbService.ConnectSQL(connection)
+		sqlClient, err := h.dbService.ConnectSQL(*connection)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to database: " + err.Error(),
@@ -493,11 +520,11 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 		limit = 10
 	}
 
-	// Get database connection info using GORM
-	var connection models.DatabaseConnection
-	if err := config.DB.Where("id = ? AND user_id = ?", databaseID, userID).First(&connection).Error; err != nil {
+	// Get database connection using helper function
+	connection, err := h.getDatabaseConnection(databaseID, userID)
+	if err != nil {
 		return c.Status(404).JSON(fiber.Map{
-			"error": "Database connection not found",
+			"error": err.Error(),
 		})
 	}
 
@@ -507,7 +534,7 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 	switch connection.Type {
 	case "mongodb":
 		// Connect to MongoDB
-		client, err := h.dbService.ConnectMongoDB(connection)
+		client, err := h.dbService.ConnectMongoDB(*connection)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to MongoDB: " + err.Error(),
@@ -575,7 +602,7 @@ func (h *DatabaseManagementHandler) GetDocuments(c *fiber.Ctx) error {
 
 	case "mysql", "postgresql", "postgres":
 		// For SQL databases
-		sqlClient, err := h.dbService.ConnectSQL(connection)
+		sqlClient, err := h.dbService.ConnectSQL(*connection)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to database: " + err.Error(),
@@ -769,22 +796,22 @@ func (h *DatabaseManagementHandler) CreateDocument(c *fiber.Ctx) error {
 
 	log.Printf("Looking for database connection with ID: %s and userID: %s", databaseID, userID)
 
-	// Get database connection info using GORM
-	var connection models.DatabaseConnection
-	if err := config.DB.Where("id = ? AND user_id = ?", databaseID, userID).First(&connection).Error; err != nil {
+	// Get database connection using helper function
+	connection, err := h.getDatabaseConnection(databaseID, userID)
+	if err != nil {
 		log.Printf("Database connection not found error: %v", err)
 		return c.Status(404).JSON(fiber.Map{
-			"error": "Database connection not found",
+			"error": err.Error(),
 		})
 	}
 
-	log.Printf("Found connection: %+v", connection)
+	log.Printf("Found connection: %+v", *connection)
 
 	switch connection.Type {
 	case "mongodb":
 		log.Printf("Processing MongoDB database type: %s", connection.Type)
 		// Connect to MongoDB
-		client, err := h.dbService.ConnectMongoDB(connection)
+		client, err := h.dbService.ConnectMongoDB(*connection)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to MongoDB: " + err.Error(),
@@ -812,7 +839,7 @@ func (h *DatabaseManagementHandler) CreateDocument(c *fiber.Ctx) error {
 	case "mysql", "postgresql", "postgres":
 		log.Printf("Processing SQL database type: %s", connection.Type)
 		// For SQL databases, convert map to INSERT statement
-		sqlClient, err := h.dbService.ConnectSQL(connection)
+		sqlClient, err := h.dbService.ConnectSQL(*connection)
 		if err != nil {
 			log.Printf("SQL connection error: %v", err)
 			return c.Status(500).JSON(fiber.Map{
@@ -902,18 +929,18 @@ func (h *DatabaseManagementHandler) UpdateDocument(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get database connection info using GORM
-	var connection models.DatabaseConnection
-	if err := config.DB.Where("id = ? AND user_id = ?", databaseID, userID).First(&connection).Error; err != nil {
+	// Get database connection using helper function
+	connection, err := h.getDatabaseConnection(databaseID, userID)
+	if err != nil {
 		return c.Status(404).JSON(fiber.Map{
-			"error": "Database connection not found",
+			"error": err.Error(),
 		})
 	}
 
 	switch connection.Type {
 	case "mongodb":
 		// Connect to MongoDB
-		client, err := h.dbService.ConnectMongoDB(connection)
+		client, err := h.dbService.ConnectMongoDB(*connection)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to MongoDB: " + err.Error(),
@@ -957,7 +984,7 @@ func (h *DatabaseManagementHandler) UpdateDocument(c *fiber.Ctx) error {
 
 	case "mysql", "postgresql", "postgres":
 		// For SQL databases
-		sqlClient, err := h.dbService.ConnectSQL(connection)
+		sqlClient, err := h.dbService.ConnectSQL(*connection)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to database: " + err.Error(),
@@ -1050,18 +1077,18 @@ func (h *DatabaseManagementHandler) DeleteDocument(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get database connection info using GORM
-	var connection models.DatabaseConnection
-	if err := config.DB.Where("id = ? AND user_id = ?", databaseID, userID).First(&connection).Error; err != nil {
+	// Get database connection using helper function
+	connection, err := h.getDatabaseConnection(databaseID, userID)
+	if err != nil {
 		return c.Status(404).JSON(fiber.Map{
-			"error": "Database connection not found",
+			"error": err.Error(),
 		})
 	}
 
 	switch connection.Type {
 	case "mongodb":
 		// Connect to MongoDB
-		client, err := h.dbService.ConnectMongoDB(connection)
+		client, err := h.dbService.ConnectMongoDB(*connection)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to MongoDB: " + err.Error(),
@@ -1101,7 +1128,7 @@ func (h *DatabaseManagementHandler) DeleteDocument(c *fiber.Ctx) error {
 
 	case "mysql", "postgresql", "postgres":
 		// For SQL databases
-		sqlClient, err := h.dbService.ConnectSQL(connection)
+		sqlClient, err := h.dbService.ConnectSQL(*connection)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": "Failed to connect to database: " + err.Error(),

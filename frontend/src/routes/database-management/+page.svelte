@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { isAuthenticated, connections } from '$lib/stores';
+	import { apiClient } from '$lib/api';
 	import Input from '$lib/components/Input.svelte';
 	import Navbar from '$lib/components/Navbar.svelte';
 	import ShareDatabaseModal from '$lib/components/ShareDatabaseModal.svelte';
@@ -72,8 +73,11 @@
 			return;
 		}
 
-		// Load shared databases first
-		await loadSharedDatabases();
+		// Load both connections and shared databases first
+		await Promise.all([
+			loadConnections(),
+			loadSharedDatabases()
+		]);
 
 		// Check if this is a shared database from URL params or localStorage
 		const urlShared = $page.url.searchParams.get('shared');
@@ -92,32 +96,22 @@
 		const storedDbId = localStorage.getItem('selectedDatabaseId');
 		const targetId = connectionId || dbId || storedDbId;
 		
-		console.log('Target ID:', targetId);
-		console.log('Shared databases:', sharedDatabases);
-		console.log('Connections:', $connections);
-		
 		if (targetId) {
 			// First look in owned connections
 			selectedConnection = $connections.find(c => c.id === targetId);
-			console.log('Found in connections:', selectedConnection);
 			
 			// If not found, look in shared databases
 			if (!selectedConnection) {
 				const sharedDb = sharedDatabases.find(s => s.database.id === targetId);
-				console.log('Found in shared:', sharedDb);
 				if (sharedDb) {
 					selectedConnection = sharedDb.database;
 					isSharedDatabase = true;
 					databasePermission = sharedDb.permission_level;
-					console.log('Selected shared database:', selectedConnection);
 				}
 			}
 			
 			if (selectedConnection) {
-				console.log('Loading collections for:', selectedConnection.name);
 				await loadCollections();
-			} else {
-				console.log('No database found with ID:', targetId);
 			}
 		}
 
@@ -129,9 +123,32 @@
 
 	async function loadSharedDatabases() {
 		try {
+			console.log('📡 Fetching shared databases...');
 			sharedDatabases = await apiClient.getSharedDatabases();
+			console.log('✅ Received shared databases:', sharedDatabases);
 		} catch (err) {
-			console.error('Failed to load shared databases:', err);
+			console.error('❌ Failed to load shared databases:', err);
+		}
+	}
+
+	async function loadConnections() {
+		try {
+			console.log('📡 Fetching connections from /api/database...');
+			const response = await fetch('http://localhost:8081/api/database', {
+				headers: {
+					'Authorization': `Bearer ${localStorage.getItem('token')}`
+				}
+			});
+
+			if (response.ok) {
+				const connectionsData = await response.json();
+				console.log('✅ Received connections data:', connectionsData);
+				connections.set(connectionsData);
+			} else {
+				console.error('❌ Failed to fetch connections:', response.status, response.statusText);
+			}
+		} catch (err) {
+			console.error('❌ Error loading connections:', err);
 		}
 	}
 
@@ -155,6 +172,25 @@
 		console.log('canAdmin check:', { isOwnerCheck, isSharedDatabase, databasePermission, hasAdminAccess });
 		if (isOwnerCheck) return true;
 		return hasAdminAccess;
+	}
+
+	async function leaveSharedDatabase() {
+		if (!isSharedDatabase || !selectedConnection) return;
+
+		if (!confirm('Are you sure you want to leave this shared database? You will lose access to it and will need to be re-invited.')) {
+			return;
+		}
+
+		try {
+			await apiClient.leaveSharedDatabase(selectedConnection.id);
+			alert('Successfully left the shared database');
+			
+			// Redirect to dashboard
+			goto('/dashboard');
+		} catch (error) {
+			console.error('Error leaving shared database:', error);
+			alert('Failed to leave shared database: ' + (error.response?.data?.error || error.message));
+		}
 	}
 
 	async function loadCollections() {
@@ -858,21 +894,30 @@
 	<div class="page-header">
 		<h1>Database Management</h1>
 		{#if selectedConnection}
-			<p class="subtitle">
-				Managing: <strong>{selectedConnection.name}</strong> ({selectedConnection.type})
-				{#if isSharedDatabase}
-					<span class="shared-badge">{databasePermission} access</span>
-				{/if}
-				{#if canAdmin()}
-					<button class="btn btn-share" on:click={() => {
-						console.log('Share button clicked, showShareModal:', showShareModal);
-						showShareModal = true;
-						console.log('showShareModal set to:', showShareModal);
-					}} title="Share Database">
-						🔗 Share
-					</button>
-				{/if}
-			</p>
+			<div class="subtitle">
+				<div class="subtitle-info">
+					Managing: <strong>{selectedConnection.name}</strong> ({selectedConnection.type})
+					{#if isSharedDatabase}
+						<span class="shared-badge">{databasePermission} access</span>
+					{/if}
+				</div>
+				<div class="database-actions">
+					{#if canAdmin()}
+						<button class="btn btn-share" on:click={() => {
+							console.log('Share button clicked, showShareModal:', showShareModal);
+							showShareModal = true;
+							console.log('showShareModal set to:', showShareModal);
+						}} title="Share Database">
+							🔗 Share
+						</button>
+					{/if}
+					{#if isSharedDatabase}
+						<button class="btn btn-danger" on:click={leaveSharedDatabase} title="Leave Shared Database">
+							❌ Leave Database
+						</button>
+					{/if}
+				</div>
+			</div>
 		{/if}
 	</div>
 
@@ -2856,10 +2901,41 @@
 		box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
 	}
 
+	.btn-danger {
+		background: linear-gradient(135deg, #ef4444, #dc2626);
+		color: white;
+		border: none;
+		padding: 0.5rem 1rem;
+		border-radius: 6px;
+		font-size: 0.875rem;
+		font-weight: 500;
+		cursor: pointer;
+		margin-left: 1rem;
+		transition: all 0.2s ease;
+	}
+
+	.btn-danger:hover {
+		transform: translateY(-1px);
+		box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+		background: linear-gradient(135deg, #dc2626, #b91c1c);
+	}
+
 	.subtitle {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+	}
+
+	.subtitle-info {
+		display: flex;
+		align-items: center;
+		gap: 1rem;
+	}
+
+	.database-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
 	}
 
 	.shared-badge {
