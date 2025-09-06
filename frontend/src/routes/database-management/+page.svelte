@@ -5,6 +5,7 @@
 	import { isAuthenticated, connections } from '$lib/stores';
 	import Input from '$lib/components/Input.svelte';
 	import Navbar from '$lib/components/Navbar.svelte';
+	import ShareDatabaseModal from '$lib/components/ShareDatabaseModal.svelte';
 
 	// Main state
 	let selectedConnection = null;
@@ -15,6 +16,7 @@
 	let loading = false;
 	let error = '';
 	let success = '';
+	let sharedDatabases = [];
 
 	// Pagination
 	let currentPage = 1;
@@ -34,10 +36,15 @@
 	let showEditModal = false;
 	let showDeleteModal = false;
 	let showFilterModal = false;
+	let showShareModal = false;
 	let currentDocument = {};
 	let newDocumentData = {}; // For form-based creation
 	let currentDocumentJSON = '';
 	let documentToDelete = null;
+
+	// Permission and sharing states
+	let isSharedDatabase = false;
+	let databasePermission = 'read'; // read, write, admin
 
 	// Drag functionality for modals
 	let isDraggingCreate = false;
@@ -65,15 +72,90 @@
 			return;
 		}
 
-		// Get connection ID from URL params
+		// Load shared databases first
+		await loadSharedDatabases();
+
+		// Check if this is a shared database from URL params or localStorage
+		const urlShared = $page.url.searchParams.get('shared');
+		const urlPermission = $page.url.searchParams.get('permission');
+		const storedShared = localStorage.getItem('isSharedDatabase');
+		const storedPermission = localStorage.getItem('selectedDatabasePermission');
+
+		if (urlShared === 'true' || storedShared === 'true') {
+			isSharedDatabase = true;
+			databasePermission = urlPermission || storedPermission || 'read';
+		}
+
+		// Get database ID from URL params (either 'connection' or 'db')
 		const connectionId = $page.url.searchParams.get('connection');
-		if (connectionId) {
-			selectedConnection = $connections.find(c => c.id === connectionId);
+		const dbId = $page.url.searchParams.get('db');
+		const storedDbId = localStorage.getItem('selectedDatabaseId');
+		const targetId = connectionId || dbId || storedDbId;
+		
+		console.log('Target ID:', targetId);
+		console.log('Shared databases:', sharedDatabases);
+		console.log('Connections:', $connections);
+		
+		if (targetId) {
+			// First look in owned connections
+			selectedConnection = $connections.find(c => c.id === targetId);
+			console.log('Found in connections:', selectedConnection);
+			
+			// If not found, look in shared databases
+			if (!selectedConnection) {
+				const sharedDb = sharedDatabases.find(s => s.database.id === targetId);
+				console.log('Found in shared:', sharedDb);
+				if (sharedDb) {
+					selectedConnection = sharedDb.database;
+					isSharedDatabase = true;
+					databasePermission = sharedDb.permission_level;
+					console.log('Selected shared database:', selectedConnection);
+				}
+			}
+			
 			if (selectedConnection) {
+				console.log('Loading collections for:', selectedConnection.name);
 				await loadCollections();
+			} else {
+				console.log('No database found with ID:', targetId);
 			}
 		}
+
+		// Clear localStorage after use
+		localStorage.removeItem('selectedDatabaseId');
+		localStorage.removeItem('selectedDatabasePermission');
+		localStorage.removeItem('isSharedDatabase');
 	});
+
+	async function loadSharedDatabases() {
+		try {
+			sharedDatabases = await apiClient.getSharedDatabases();
+		} catch (err) {
+			console.error('Failed to load shared databases:', err);
+		}
+	}
+
+	// Check if current user owns the selected database
+	function isOwner(connection) {
+		if (!connection) return false;
+		// If connection is from $connections, user is owner
+		return $connections.some(c => c.id === connection.id);
+	}
+
+	// Check if user can perform write operations
+	function canWrite() {
+		if (isOwner(selectedConnection)) return true;
+		return isSharedDatabase && (databasePermission === 'write' || databasePermission === 'admin');
+	}
+
+	// Check if user can perform admin operations (like sharing)
+	function canAdmin() {
+		const isOwnerCheck = isOwner(selectedConnection);
+		const hasAdminAccess = isSharedDatabase && databasePermission === 'admin';
+		console.log('canAdmin check:', { isOwnerCheck, isSharedDatabase, databasePermission, hasAdminAccess });
+		if (isOwnerCheck) return true;
+		return hasAdminAccess;
+	}
 
 	async function loadCollections() {
 		if (!selectedConnection) return;
@@ -776,7 +858,21 @@
 	<div class="page-header">
 		<h1>Database Management</h1>
 		{#if selectedConnection}
-			<p class="subtitle">Managing: <strong>{selectedConnection.name}</strong> ({selectedConnection.type})</p>
+			<p class="subtitle">
+				Managing: <strong>{selectedConnection.name}</strong> ({selectedConnection.type})
+				{#if isSharedDatabase}
+					<span class="shared-badge">{databasePermission} access</span>
+				{/if}
+				{#if canAdmin()}
+					<button class="btn btn-share" on:click={() => {
+						console.log('Share button clicked, showShareModal:', showShareModal);
+						showShareModal = true;
+						console.log('showShareModal set to:', showShareModal);
+					}} title="Share Database">
+						🔗 Share
+					</button>
+				{/if}
+			</p>
 		{/if}
 	</div>
 
@@ -796,26 +892,74 @@
 		<div class="no-connection">
 			<h2>Select a Database Connection</h2>
 			<p>Choose a database connection to manage collections and documents.</p>
-			<div class="connections-grid">
-				{#each $connections as connection}
-					<div class="connection-card" on:click={() => {selectedConnection = connection; loadCollections()}}>
-						<div class="connection-icon">
-							{#if connection.type === 'mongodb'}
-								🍃
-							{:else if connection.type === 'mysql'}
-								🐬
-							{:else if connection.type === 'postgresql'}
-								🐘
-							{:else}
-								💾
-							{/if}
+			
+			{#if $connections.length > 0}
+				<h3>Your Databases</h3>
+				<div class="connections-grid">
+					{#each $connections as connection}
+						<div class="connection-card" on:click={() => {
+							selectedConnection = connection; 
+							isSharedDatabase = false;
+							databasePermission = 'admin';
+							loadCollections();
+						}}>
+							<div class="connection-icon">
+								{#if connection.type === 'mongodb'}
+									🍃
+								{:else if connection.type === 'mysql'}
+									🐬
+								{:else if connection.type === 'postgresql'}
+									🐘
+								{:else}
+									💾
+								{/if}
+							</div>
+							<h3>{connection.name}</h3>
+							<p>{connection.type}</p>
+							<p class="host">{connection.host}:{connection.port}</p>
+							<div class="connection-owner">Owner</div>
 						</div>
-						<h3>{connection.name}</h3>
-						<p>{connection.type}</p>
-						<p class="host">{connection.host}:{connection.port}</p>
-					</div>
-				{/each}
-			</div>
+					{/each}
+				</div>
+			{/if}
+
+			{#if sharedDatabases.length > 0}
+				<h3>Shared with You</h3>
+				<div class="connections-grid">
+					{#each sharedDatabases as shared}
+						<div class="connection-card shared-card" on:click={() => {
+							selectedConnection = shared.database; 
+							isSharedDatabase = true;
+							databasePermission = shared.permission_level;
+							loadCollections();
+						}}>
+							<div class="connection-icon">
+								{#if shared.database.type === 'mongodb'}
+									🍃
+								{:else if shared.database.type === 'mysql'}
+									🐬
+								{:else if shared.database.type === 'postgresql'}
+									🐘
+								{:else}
+									💾
+								{/if}
+							</div>
+							<h3>{shared.database.name}</h3>
+							<p>{shared.database.type}</p>
+							<p class="host">{shared.database.host}:{shared.database.port}</p>
+							<div class="connection-permission">{shared.permission_level} access</div>
+							<div class="connection-shared">Shared by {shared.grantor.email}</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
+
+			{#if $connections.length === 0 && sharedDatabases.length === 0}
+				<div class="empty-state">
+					<p>No database connections available</p>
+					<a href="/connections" class="btn btn-primary">Add Connection</a>
+				</div>
+			{/if}
 		</div>
 	{:else}
 		<div class="database-management">
@@ -855,9 +999,11 @@
 							</p>
 						</div>
 						<div class="controls-right">
-							<button class="btn btn-primary" on:click={openCreateModal}>
-								➕ Add Document
-							</button>
+							{#if canWrite()}
+								<button class="btn btn-primary" on:click={openCreateModal}>
+									➕ Add Document
+								</button>
+							{/if}
 							<button class="btn btn-secondary" on:click={() => showFilterModal = true}>
 								🔍 Filter
 							</button>
@@ -914,7 +1060,9 @@
 													</button>
 												</th>
 											{/each}
-											<th class="actions-column">Actions</th>
+											{#if canWrite()}
+												<th class="actions-column">Actions</th>
+											{/if}
 										</tr>
 									</thead>
 									<tbody>
@@ -923,22 +1071,24 @@
 												{#each getDocumentKeys(documents) as key}
 													<td class="data-cell">{formatValue(document[key])}</td>
 												{/each}
-												<td class="actions-cell">
-													<div class="action-buttons">
-														<button 
-															class="btn btn-sm btn-info"
-															on:click={() => openEditModal(document)}
-														>
-															✏️ Edit
-														</button>
-														<button 
-															class="btn btn-sm btn-danger"
-															on:click={() => openDeleteModal(document)}
-														>
-															🗑️ Delete
-														</button>
-													</div>
-												</td>
+												{#if canWrite()}
+													<td class="actions-cell">
+														<div class="action-buttons">
+															<button 
+																class="btn btn-sm btn-info"
+																on:click={() => openEditModal(document)}
+															>
+																✏️ Edit
+															</button>
+															<button 
+																class="btn btn-sm btn-danger"
+																on:click={() => openDeleteModal(document)}
+															>
+																🗑️ Delete
+															</button>
+														</div>
+													</td>
+												{/if}
 											</tr>
 										{/each}
 								</tbody>
@@ -1384,6 +1534,67 @@
 		font-family: monospace;
 		font-size: 0.9rem;
 		color: #888;
+	}
+
+	/* Shared Cards Styling */
+	.shared-card {
+		border-color: #e0f2fe;
+		background: linear-gradient(135deg, #f0f9ff, #ffffff);
+	}
+
+	.shared-card:hover {
+		border-color: #0ea5e9;
+	}
+
+	.connection-owner {
+		background: #dcfce7;
+		color: #166534;
+		padding: 0.25rem 0.5rem;
+		border-radius: 4px;
+		font-size: 0.75rem;
+		font-weight: 500;
+		margin-top: 0.5rem;
+		display: inline-block;
+	}
+
+	.connection-permission {
+		background: #fef3c7;
+		color: #92400e;
+		padding: 0.25rem 0.5rem;
+		border-radius: 4px;
+		font-size: 0.75rem;
+		font-weight: 500;
+		margin-top: 0.5rem;
+		display: inline-block;
+		text-transform: capitalize;
+	}
+
+	.connection-shared {
+		font-size: 0.75rem;
+		color: #64748b;
+		margin-top: 0.5rem;
+		font-style: italic;
+	}
+
+	.no-connection h3 {
+		color: #334155;
+		font-size: 1.25rem;
+		margin: 2rem 0 1rem 0;
+		border-bottom: 2px solid #e2e8f0;
+		padding-bottom: 0.5rem;
+	}
+
+	.empty-state {
+		margin-top: 2rem;
+		padding: 2rem;
+		background: #f8fafc;
+		border-radius: 8px;
+		border: 1px dashed #cbd5e1;
+	}
+
+	.empty-state p {
+		margin-bottom: 1rem;
+		color: #64748b;
 	}
 
 	/* Database Management Layout */
@@ -2626,4 +2837,54 @@
 			padding: 8px 12px;
 		}
 	}
+
+	.btn-share {
+		background: linear-gradient(135deg, #667eea, #764ba2);
+		color: white;
+		border: none;
+		padding: 0.5rem 1rem;
+		border-radius: 6px;
+		font-size: 0.875rem;
+		font-weight: 500;
+		cursor: pointer;
+		margin-left: 1rem;
+		transition: all 0.2s ease;
+	}
+
+	.btn-share:hover {
+		transform: translateY(-1px);
+		box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+	}
+
+	.subtitle {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.shared-badge {
+		background: linear-gradient(135deg, #10b981, #059669);
+		color: white;
+		padding: 0.25rem 0.75rem;
+		border-radius: 12px;
+		font-size: 0.75rem;
+		font-weight: 600;
+		margin-left: 0.5rem;
+		text-transform: capitalize;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+	}
+
+	.shared-badge::before {
+		content: "👥";
+		font-size: 0.875rem;
+	}
 </style>
+
+<!-- Share Database Modal -->
+<ShareDatabaseModal 
+	bind:isOpen={showShareModal} 
+	database={selectedConnection}
+	on:close={() => showShareModal = false}
+/>

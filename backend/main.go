@@ -47,6 +47,7 @@ func main() {
 	apiHandler := handlers.NewAPIHandler()
 	dbManagementHandler := handlers.NewDatabaseManagementHandler()
 	dynamicAPIHandler := handlers.NewDynamicAPIHandlerOptimized() // Use optimized version
+	sharingHandler := handlers.NewSharingHandler()
 
 	// Routes
 	api := app.Group("/api")
@@ -89,6 +90,18 @@ func main() {
 
 	// Memory monitoring endpoint (protected)
 	apiGroup.Get("/memory-stats", dynamicAPIHandler.GetMemoryStats)
+
+	// Database sharing routes (protected)
+	sharing := api.Group("/sharing", handlers.JWTMiddleware)
+	sharing.Post("/invitations", sharingHandler.CreateInvitation)
+	sharing.Get("/invitations/database/:databaseId", sharingHandler.GetDatabaseInvitations)
+	sharing.Get("/invitations/:token", sharingHandler.GetInvitation)
+	sharing.Post("/invitations/:token/accept", sharingHandler.AcceptInvitation)
+	sharing.Get("/shared-databases", sharingHandler.GetSharedDatabases)
+	sharing.Get("/pending-invitations", sharingHandler.GetPendingInvitations)
+	sharing.Get("/database-access/:databaseId", sharingHandler.GetDatabaseAccess)
+	sharing.Delete("/access", sharingHandler.RevokeAccess)
+	sharing.Delete("/invitations/:invitationId", sharingHandler.RevokeInvitation)
 
 	// Dynamic API routes (public with API key)
 	dynamicAPI := api.Group("/:collection", 

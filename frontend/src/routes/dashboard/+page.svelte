@@ -12,9 +12,12 @@
 		activeEndpoints: 0,
 		totalAPIKeys: 0,
 		activeAPIKeys: 0,
-		totalLogs: 0
+		totalLogs: 0,
+		sharedDatabases: 0
 	};
 	let recentLogs = [];
+	let sharedDatabases = [];
+	let pendingInvitations = [];
 	let loading = true;
 
 	onMount(async () => {
@@ -49,10 +52,40 @@
 			recentLogs = logs.slice(0, 10);
 			stats.totalLogs = logs.length;
 
+			// Load shared databases
+			const sharedData = await apiClient.getSharedDatabases();
+			sharedDatabases = sharedData;
+			stats.sharedDatabases = sharedData.length;
+
+			// Load pending invitations
+			const pendingData = await apiClient.getPendingInvitations();
+			pendingInvitations = pendingData;
+
 		} catch (error) {
 			console.error('Error loading dashboard data:', error);
 		} finally {
 			loading = false;
+		}
+	}
+
+	function manageSharedDatabase(shared) {
+		// Store the selected database ID and permission in localStorage for database management page
+		localStorage.setItem('selectedDatabaseId', shared.database.id);
+		localStorage.setItem('selectedDatabasePermission', shared.permission_level);
+		localStorage.setItem('isSharedDatabase', 'true');
+		
+		// Redirect to database management with query parameters
+		goto(`/database-management?db=${shared.database.id}&shared=true&permission=${shared.permission_level}`);
+	}
+
+	async function acceptInvitation(token) {
+		try {
+			await apiClient.acceptInvitation(token);
+			// Reload dashboard data to update lists
+			await loadDashboardData();
+		} catch (error) {
+			console.error('Error accepting invitation:', error);
+			alert('Failed to accept invitation: ' + (error.response?.data?.error || error.message));
 		}
 	}
 </script>
@@ -68,6 +101,32 @@
 		<h1>Dashboard</h1>
 		<p>Welcome back, {$user?.email}</p>
 	</div>
+
+	{#if pendingInvitations.length > 0}
+		<div class="pending-invitations-alert">
+			<div class="alert-content">
+				<div class="alert-icon">
+					<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+					</svg>
+				</div>
+				<div class="alert-text">
+					<h3>You have {pendingInvitations.length} pending database invitation{pendingInvitations.length > 1 ? 's' : ''}!</h3>
+					<p>Someone has shared a database with you.</p>
+				</div>
+				<div class="alert-actions">
+					{#each pendingInvitations as invitation}
+						<button 
+							class="btn btn-primary btn-sm"
+							on:click={() => acceptInvitation(invitation.invitation_token)}
+						>
+							Accept from {invitation.inviter.email}
+						</button>
+					{/each}
+				</div>
+			</div>
+		</div>
+	{/if}
 
 	{#if loading}
 		<div class="loading">
@@ -187,6 +246,46 @@
 			</div>
 
 			<div class="card">
+				<h2>Shared Databases</h2>
+				{#if sharedDatabases.length === 0}
+					<div class="empty-state">
+						<p>No shared databases</p>
+						<small>Databases shared with you will appear here</small>
+					</div>
+				{:else}
+					<div class="shared-list">
+						{#each sharedDatabases.slice(0, 5) as shared}
+							<div class="shared-item">
+								<div class="shared-info">
+									<div class="shared-name">{shared.database.name}</div>
+									<div class="shared-details">
+										Shared by {shared.grantor.email} • {shared.permission_level} access
+									</div>
+								</div>
+								<div class="shared-actions">
+									<div class="shared-type">{shared.database.type}</div>
+									<button 
+										class="btn btn-sm btn-primary" 
+										on:click={() => manageSharedDatabase(shared)}
+									>
+										Manage
+									</button>
+								</div>
+							</div>
+						{/each}
+					</div>
+					{#if sharedDatabases.length > 5}
+						<button class="btn btn-secondary" on:click={() => goto('/database-management')}>
+							View All Shared Databases
+						</button>
+					{/if}
+				{/if}
+			</div>
+		</div>
+
+		<!-- Additional Activity Section -->
+		<div class="grid grid-2">
+			<div class="card">
 				<h2>Recent API Activity</h2>
 				{#if recentLogs.length === 0}
 					<div class="empty-state">
@@ -210,6 +309,20 @@
 					</div>
 					<a href="/api-management?tab=logs" class="btn btn-secondary">View All Logs</a>
 				{/if}
+			</div>
+
+			<div class="card">
+				<h2>Quick Stats</h2>
+				<div class="quick-stats">
+					<div class="quick-stat">
+						<span class="stat-value">{stats.sharedDatabases}</span>
+						<span class="stat-label">Shared Databases</span>
+					</div>
+					<div class="quick-stat">
+						<span class="stat-value">{stats.totalLogs}</span>
+						<span class="stat-label">Total API Calls</span>
+					</div>
+				</div>
 			</div>
 		</div>
 	{/if}
@@ -404,5 +517,155 @@
 	.btn-primary:hover {
 		transform: translateY(-1px);
 		box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+	}
+
+	/* Shared Databases Styles */
+	.shared-list {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		margin-bottom: 16px;
+	}
+
+	.shared-item {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 12px;
+		background: #f8fafc;
+		border-radius: 8px;
+		border: 1px solid #e2e8f0;
+	}
+
+	.shared-info {
+		flex: 1;
+	}
+
+	.shared-actions {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+	}
+
+	.shared-name {
+		font-weight: 600;
+		color: #1e293b;
+		margin-bottom: 4px;
+	}
+
+	.shared-details {
+		font-size: 0.875rem;
+		color: #64748b;
+	}
+
+	.shared-type {
+		background: #e0f2fe;
+		color: #0369a1;
+		padding: 4px 8px;
+		border-radius: 4px;
+		font-size: 0.75rem;
+		font-weight: 500;
+		text-transform: uppercase;
+	}
+
+	/* Quick Stats */
+	.quick-stats {
+		display: flex;
+		gap: 2rem;
+		justify-content: space-around;
+		margin-top: 1rem;
+	}
+
+	.quick-stat {
+		text-align: center;
+	}
+
+	.quick-stat .stat-value {
+		display: block;
+		font-size: 2rem;
+		font-weight: 700;
+		color: #667eea;
+		margin-bottom: 0.25rem;
+	}
+
+	.quick-stat .stat-label {
+		font-size: 0.875rem;
+		color: #64748b;
+	}
+
+	.btn-sm {
+		padding: 0.5rem 1rem;
+		font-size: 0.875rem;
+	}
+
+	.btn-secondary {
+		background: #f1f5f9;
+		color: #475569;
+		border: 1px solid #e2e8f0;
+		text-decoration: none;
+		display: inline-block;
+		text-align: center;
+		margin-top: 1rem;
+	}
+
+	.btn-secondary:hover {
+		background: #e2e8f0;
+		color: #334155;
+	}
+
+	/* Pending Invitations Alert */
+	.pending-invitations-alert {
+		background: linear-gradient(135deg, #fef3c7, #f59e0b);
+		border: 1px solid #f59e0b;
+		border-radius: 12px;
+		padding: 1.5rem;
+		margin-bottom: 2rem;
+		box-shadow: 0 4px 6px rgba(245, 158, 11, 0.1);
+	}
+
+	.alert-content {
+		display: flex;
+		align-items: center;
+		gap: 1rem;
+	}
+
+	.alert-icon {
+		background: white;
+		border-radius: 50%;
+		width: 48px;
+		height: 48px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: #f59e0b;
+		flex-shrink: 0;
+	}
+
+	.alert-text {
+		flex: 1;
+	}
+
+	.alert-text h3 {
+		margin: 0 0 0.25rem 0;
+		font-size: 1.125rem;
+		font-weight: 600;
+		color: #92400e;
+	}
+
+	.alert-text p {
+		margin: 0;
+		color: #92400e;
+		opacity: 0.8;
+	}
+
+	.alert-actions {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	.btn-sm {
+		padding: 0.5rem 1rem;
+		font-size: 0.875rem;
 	}
 </style>

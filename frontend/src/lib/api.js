@@ -126,6 +126,54 @@ class ApiClient {
         const response = await this.client.delete('/api-management/logs');
         return response.data;
     }
+
+    // Database sharing methods
+    async createInvitation(data) {
+        const response = await this.client.post('/sharing/invitations', data);
+        return response.data;
+    }
+
+    async getDatabaseInvitations(databaseId) {
+        const response = await this.client.get(`/sharing/invitations/database/${databaseId}`);
+        return response.data;
+    }
+
+    async getInvitation(token) {
+        const response = await this.client.get(`/sharing/invitations/${token}`);
+        return response.data;
+    }
+
+    async acceptInvitation(token) {
+        const response = await this.client.post(`/sharing/invitations/${token}/accept`);
+        return response.data;
+    }
+
+    async getSharedDatabases() {
+        const response = await this.client.get('/sharing/shared-databases');
+        return response.data;
+    }
+
+    async getPendingInvitations() {
+        const response = await this.client.get('/sharing/pending-invitations');
+        return response.data;
+    }
+
+    async getDatabaseAccess(databaseId) {
+        const response = await this.client.get(`/sharing/database-access/${databaseId}`);
+        return response.data;
+    }
+
+    async revokeAccess(databaseId, userId) {
+        const response = await this.client.delete('/sharing/access', {
+            data: { database_id: databaseId, user_id: userId }
+        });
+        return response.data;
+    }
+
+    async revokeInvitation(invitationId) {
+        const response = await this.client.delete(`/sharing/invitations/${invitationId}`);
+        return response.data;
+    }
 }
 
 export const apiClient = new ApiClient();

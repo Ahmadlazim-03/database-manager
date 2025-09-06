@@ -106,3 +106,47 @@ func (al *APILog) BeforeCreate(tx *gorm.DB) error {
 	al.ID = uuid.New()
 	return nil
 }
+
+// Database Sharing Models
+type DatabaseInvitation struct {
+	ID              uuid.UUID      `json:"id" gorm:"type:char(36);primaryKey"`
+	DatabaseID      uuid.UUID      `json:"database_id" gorm:"type:char(36);not null"`
+	InviterID       uuid.UUID      `json:"inviter_id" gorm:"type:char(36);not null"`
+	InviteeEmail    string         `json:"invitee_email" gorm:"not null"`
+	InvitationToken string         `json:"invitation_token" gorm:"uniqueIndex;not null"`
+	PermissionLevel string         `json:"permission_level" gorm:"default:'read'"` // read, write, admin
+	Status          string         `json:"status" gorm:"default:'pending'"`        // pending, accepted, rejected, expired
+	ExpiresAt       time.Time      `json:"expires_at" gorm:"not null"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	AcceptedAt      *time.Time     `json:"accepted_at"`
+	InviteeID       *uuid.UUID     `json:"invitee_id" gorm:"type:char(36)"`
+	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
+	Database        DatabaseConnection `json:"database" gorm:"foreignKey:DatabaseID"`
+	Inviter         User           `json:"inviter" gorm:"foreignKey:InviterID"`
+	Invitee         *User          `json:"invitee" gorm:"foreignKey:InviteeID"`
+}
+
+type DatabaseAccess struct {
+	ID              uuid.UUID      `json:"id" gorm:"type:char(36);primaryKey"`
+	DatabaseID      uuid.UUID      `json:"database_id" gorm:"type:char(36);not null"`
+	UserID          uuid.UUID      `json:"user_id" gorm:"type:char(36);not null"`
+	PermissionLevel string         `json:"permission_level" gorm:"default:'read'"` // read, write, admin
+	GrantedBy       uuid.UUID      `json:"granted_by" gorm:"type:char(36);not null"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
+	Database        DatabaseConnection `json:"database" gorm:"foreignKey:DatabaseID"`
+	User            User           `json:"user" gorm:"foreignKey:UserID"`
+	Grantor         User           `json:"grantor" gorm:"foreignKey:GrantedBy"`
+}
+
+func (di *DatabaseInvitation) BeforeCreate(tx *gorm.DB) error {
+	di.ID = uuid.New()
+	return nil
+}
+
+func (da *DatabaseAccess) BeforeCreate(tx *gorm.DB) error {
+	da.ID = uuid.New()
+	return nil
+}

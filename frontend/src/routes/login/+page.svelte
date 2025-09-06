@@ -1,6 +1,7 @@
 <script>
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
 	import { apiClient } from '$lib/api';
 	import { setUser, isAuthenticated } from '$lib/stores';
 	import Button from '$lib/components/Button.svelte';
@@ -38,7 +39,20 @@
 
 			const response = await apiClient.login(email, password);
 			setUser(response.user, response.token);
-			goto('/dashboard');
+
+			// Check for pending invitation or redirect parameter
+			const redirectUrl = $page.url.searchParams.get('redirect');
+			const pendingInvitation = localStorage.getItem('pendingInvitation');
+			
+			if (redirectUrl) {
+				localStorage.removeItem('pendingInvitation');
+				goto(redirectUrl);
+			} else if (pendingInvitation) {
+				localStorage.removeItem('pendingInvitation');
+				goto(`/join/${pendingInvitation}`);
+			} else {
+				goto('/dashboard');
+			}
 		} catch (err) {
 			error = err.response?.data?.error || 'Login failed. Please check your credentials.';
 		} finally {

@@ -67,6 +67,8 @@ func ConnectDB() {
 		&models.APIKey{},
 		&models.APIEndpoint{},
 		&models.APILog{},
+		&models.DatabaseInvitation{},
+		&models.DatabaseAccess{},
 	)
 	if err != nil {
 		log.Fatal("Failed to migrate database:", err)
